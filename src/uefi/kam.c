@@ -15,6 +15,7 @@
 #include "kam/config.h"
 #include "kam/gop.h"
 #include "kam/linux.h"
+#include "kam/sha256.h"
 
 #if defined(__x86_64__)
 #define KAM_ARCH_NAME "x86_64 UEFI"
@@ -30,8 +31,8 @@
 static kam_u8 kam_map_buf[KAM_MAP_BUF_SIZE];
 static kam_memmap_t kam_map;
 static kam_u8 kam_info_buf[128];
-static kam_entry_t kam_entries[KAM_SCAN_MAX];
 static kam_entry_t kam_scanout[KAM_SCAN_MAX];
+static kam_config_t kam_cfg;
 
 static const kam_char16 KAM_INI_PATH[] = {
     '\\', 'K', 'A', 'M', '\\', 'K', 'A', 'M', '.', 'I', 'N', 'I', 0};
@@ -110,12 +111,12 @@ static kam_usize kam_menu(kam_system_table_t *st, kam_usize count,
     for (i = 0; i < count; i++) {
         kam_put_u64(st, (kam_u64)(i + 1));
         kam_puts(st, ") [hd");
-        kam_put_u64(st, (kam_u64)kam_entries[i].vol);
+        kam_put_u64(st, (kam_u64)kam_cfg.entries[i].vol);
         kam_puts(st, "] ");
-        kam_puts(st, kam_entries[i].label);
-        kam_puts(st, kam_entries[i].kind == KAM_ENTRY_ELF ? " [elf]\n"
-                 : kam_entries[i].kind == KAM_ENTRY_EFI  ? " [efi]\n"
-                 : kam_entries[i].kind == KAM_ENTRY_ISO  ? " [iso]\n"
+        kam_puts(st, kam_cfg.entries[i].label);
+        kam_puts(st, kam_cfg.entries[i].kind == KAM_ENTRY_ELF ? " [elf]\n"
+                 : kam_cfg.entries[i].kind == KAM_ENTRY_EFI  ? " [efi]\n"
+                 : kam_cfg.entries[i].kind == KAM_ENTRY_ISO  ? " [iso]\n"
                                                         : " [linux]\n");
     }
     if (def >= count)
@@ -218,6 +219,70 @@ static kam_status_t kam_read_file(kam_boot_services_t *bs,
 }
 
 typedef void (*kam_kernel_fn)(const kam_memmap_t *map);
+
+/* Boot password gate. Hidden entry with '*' echo, SHA-256(salt + pw)
+ * against the KAM.INI hash, constant-time compare, 3 tries then halt
+ * (returning would fall through to the next firmware boot option). */
+static void kam_password_gate(kam_system_table_t *st) {
+    kam_text_in_t *cin;
+    int tries;
+    if (!kam_cfg.has_pw)
+        return;
+    cin = st->con_in;
+    if (!cin || !cin->read_key || !st->boot->stall) {
+        kam_puts(st, "KAM: no input for password, halting.\n");
+        kam_raw_halt();
+    }
+    for (tries = 0; tries < 3; tries++) {
+        char pw[64];
+        kam_usize len = 0;
+        kam_u8 salted[128];
+        kam_u8 digest[32];
+        kam_usize slen = 0;
+        kam_usize i;
+        kam_puts(st, "Password: ");
+        for (;;) {
+            kam_key_t key;
+            kam_status_t s = cin->read_key(cin, &key);
+            if (s != KAM_EFI_SUCCESS) {
+                st->boot->stall(50000);
+                continue;
+            }
+            if (key.unicode == (kam_char16)'\r')
+                break;
+            if (key.unicode == (kam_char16)'\b') {
+                if (len > 0)
+                    len--;
+                continue;
+            }
+            if (key.unicode >= 32 && key.unicode <= 126 && len + 1 < 64) {
+                pw[len++] = (char)key.unicode;
+                kam_puts(st, "*");
+            }
+        }
+        pw[len] = 0;
+        kam_puts(st, "\n");
+        while (kam_cfg.pw_salt[slen] && slen < 63)
+            slen++;
+        for (i = 0; i < slen; i++)
+            salted[i] = (kam_u8)kam_cfg.pw_salt[i];
+        for (i = 0; i < len; i++)
+            salted[slen + i] = (kam_u8)pw[i];
+        kam_sha256_once(salted, slen + len, digest);
+        for (i = 0; i < 64; i++)
+            pw[i] = 0;
+        if (kam_ct_eq(digest, kam_cfg.pw_hash, 32)) {
+            for (i = 0; i < 32; i++)
+                digest[i] = 0;
+            return;
+        }
+        for (i = 0; i < 32; i++)
+            digest[i] = 0;
+        kam_puts(st, "KAM: wrong password\n");
+    }
+    kam_puts(st, "KAM: access denied\n");
+    kam_raw_halt();
+}
 
 static kam_system_table_t *kam_st;
 
@@ -496,19 +561,25 @@ kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
     kam_win_probe(st, root);
 
     /* Static config first: KAM/KAM.INI. Missing file = dynamic only. */
+    kam_cfg.count = 0;
+    kam_cfg.timeout = 5;
+    kam_cfg.def = 0;
+    kam_cfg.has_pw = 0;
     {
         kam_u8 *cfg = 0;
         kam_usize cfg_size = 0;
         if (!KAM_EFI_ERROR(kam_read_file(bs, root, KAM_INI_PATH, &cfg,
                                          &cfg_size)) &&
             cfg_size <= 8192) {
-            count = kam_config_parse(cfg, cfg_size, kam_entries,
-                                     KAM_SCAN_MAX, &timeout, &def);
+            kam_config_parse(cfg, cfg_size, &kam_cfg);
             kam_puts(st, "KAM: config entries: ");
-            kam_put_u64(st, (kam_u64)count);
+            kam_put_u64(st, (kam_u64)kam_cfg.count);
             kam_puts(st, "\n");
         }
     }
+    count = kam_cfg.count;
+    timeout = kam_cfg.timeout;
+    def = kam_cfg.def;
 
     /* Append scanned files not already listed (same volume + path). */
     nscan = kam_scan_all(bs, image, kam_scanout, KAM_SCAN_MAX);
@@ -516,8 +587,8 @@ kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
         kam_usize j;
         int dup = 0;
         for (j = 0; j < count; j++) {
-            if (kam_scanout[i].vol == kam_entries[j].vol &&
-                kam_path_eq(kam_scanout[i].path, kam_entries[j].path)) {
+            if (kam_scanout[i].vol == kam_cfg.entries[j].vol &&
+                kam_path_eq(kam_scanout[i].path, kam_cfg.entries[j].path)) {
                 dup = 1;
                 break;
             }
@@ -525,17 +596,17 @@ kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
         if (!dup) {
             /* Field copy: no memcpy in freestanding. */
             kam_usize f;
-            kam_entries[count].kind = kam_scanout[i].kind;
-            kam_entries[count].dev = kam_scanout[i].dev;
-            kam_entries[count].vol = kam_scanout[i].vol;
+            kam_cfg.entries[count].kind = kam_scanout[i].kind;
+            kam_cfg.entries[count].dev = kam_scanout[i].dev;
+            kam_cfg.entries[count].vol = kam_scanout[i].vol;
             for (f = 0; f < KAM_PATH_CHARS; f++) {
-                kam_entries[count].path[f] = kam_scanout[i].path[f];
-                kam_entries[count].initrd[f] = kam_scanout[i].initrd[f];
+                kam_cfg.entries[count].path[f] = kam_scanout[i].path[f];
+                kam_cfg.entries[count].initrd[f] = kam_scanout[i].initrd[f];
             }
             for (f = 0; f < KAM_LABEL_CHARS; f++)
-                kam_entries[count].label[f] = kam_scanout[i].label[f];
+                kam_cfg.entries[count].label[f] = kam_scanout[i].label[f];
             for (f = 0; f < 128; f++)
-                kam_entries[count].cmdline[f] = kam_scanout[i].cmdline[f];
+                kam_cfg.entries[count].cmdline[f] = kam_scanout[i].cmdline[f];
             count++;
         }
     }
@@ -544,7 +615,8 @@ kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
         return KAM_EFI_NOT_FOUND;
     }
     sel = kam_menu(st, count, timeout, def);
-    sel_dev = kam_entries[sel].dev ? kam_entries[sel].dev : our_dev;
+    kam_password_gate(st);
+    sel_dev = kam_cfg.entries[sel].dev ? kam_cfg.entries[sel].dev : our_dev;
     if (sel_dev && sel_dev != our_dev) {
         kam_file_proto_t *eroot = 0;
         if (KAM_EFI_ERROR(kam_fs_open_volume(bs, sel_dev, &eroot)) ||
@@ -554,9 +626,9 @@ kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
         }
         root = eroot;
     }
-    if (kam_entries[sel].kind == KAM_ENTRY_ELF)
-        return kam_boot_elf(image, st, root, kam_entries[sel].path);
-    if (kam_entries[sel].kind == KAM_ENTRY_LINUX) {
+    if (kam_cfg.entries[sel].kind == KAM_ENTRY_ELF)
+        return kam_boot_elf(image, st, root, kam_cfg.entries[sel].path);
+    if (kam_cfg.entries[sel].kind == KAM_ENTRY_LINUX) {
         kam_u8 *img = 0, *ird = 0;
         kam_usize isize = 0, rsize = 0;
         kam_usize key = 0;
@@ -580,18 +652,18 @@ kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
             return KAM_EFI_DEVICE_ERROR;
         }
         if (KAM_EFI_ERROR(
-                kam_read_file(bs, root, kam_entries[sel].path, &img,
+                kam_read_file(bs, root, kam_cfg.entries[sel].path, &img,
                               &isize))) {
             kam_puts(st, "KAM: kernel file missing\n");
             return KAM_EFI_NOT_FOUND;
         }
-        if (kam_entries[sel].initrd[0] &&
-            KAM_EFI_ERROR(kam_read_file(bs, root, kam_entries[sel].initrd,
+        if (kam_cfg.entries[sel].initrd[0] &&
+            KAM_EFI_ERROR(kam_read_file(bs, root, kam_cfg.entries[sel].initrd,
                                          &ird, &rsize))) {
             kam_puts(st, "KAM: initrd file missing\n");
             return KAM_EFI_NOT_FOUND;
         }
-        cmd = kam_entries[sel].cmdline[0] ? kam_entries[sel].cmdline
+        cmd = kam_cfg.entries[sel].cmdline[0] ? kam_cfg.entries[sel].cmdline
                                           : "kam-test";
         kam_puts(st, "KAM: jumping to bzImage.\n");
         bz = kam_bz_boot(bs, img, isize, ird, rsize, cmd, &kam_map,
@@ -604,19 +676,19 @@ kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
         }
         return KAM_EFI_SUCCESS;
     }
-    if (kam_entries[sel].kind == KAM_ENTRY_ISO) {
+    if (kam_cfg.entries[sel].kind == KAM_ENTRY_ISO) {
         kam_puts(st, "KAM: probing ");
-        kam_put_path(st, kam_entries[sel].path);
+        kam_put_path(st, kam_cfg.entries[sel].path);
         kam_puts(st, "\n");
-        s = kam_boot_iso(bs, root, kam_entries[sel].path);
+        s = kam_boot_iso(bs, root, kam_cfg.entries[sel].path);
         kam_puts(st, "KAM: iso probe returned\n");
         return s;
     }
     kam_puts(st, "KAM: chainloading ");
-    kam_put_path(st, kam_entries[sel].path);
+    kam_put_path(st, kam_cfg.entries[sel].path);
     kam_puts(st, "\n");
     s = kam_chainload(bs, image, sel_dev ? sel_dev : our_dev,
-                      kam_entries[sel].path);
+                      kam_cfg.entries[sel].path);
     kam_puts(st, "KAM: chainload returned\n");
     return s;
 }
