@@ -31,7 +31,18 @@ KCFLAGS  := -ffreestanding -nostdlib -fno-stack-protector \
             -fno-unwind-tables -fno-asynchronous-unwind-tables \
             -mno-red-zone -Wall -Wextra -O2 -Iinclude -c
 
-.PHONY: all bios bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64 hello-x64 hello-aa64 esp testiso run-x64 run-aa64 run-bios test-x64 test-aa64 test-chain-x64 test-chain-aa64 test-iso-x64 test-iso-aa64 test-config-x64 test-config-aa64 test-gop-x64 test-gop-aa64 test-win-x64 test-linux-x64 test-linux-aa64 test-cd-bios test-cd-efi test-usb-bios test-usb-efi test-multivol-x64 test-parts-x64 test-pwd-x64 test-pwddeny-x64 test-pwd-aa64 test-pwddeny-aa64 test-bios unittest check-msvc clean
+.PHONY: all bios bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64 hello-x64 hello-aa64 esp testiso run-x64 run-aa64 run-bios test-x64 test-aa64 test-chain-x64 test-chain-aa64 test-iso-x64 test-iso-aa64 test-config-x64 test-config-aa64 test-gop-x64 test-gop-aa64 test-win-x64 test-linux-x64 test-linux-aa64 test-cd-bios test-cd-efi test-usb-bios test-usb-efi test-multivol-x64 test-parts-x64 test-pwd-x64 test-pwddeny-x64 test-pwd-aa64 test-pwddeny-aa64 test-bios unittest check-msvc test-all clean
+
+# Full matrix in one go (CI entry point). BIOS first (fastest), then
+# host checks, then UEFI x64, then the slower aa64 + media tests.
+test-all: test-bios unittest check-msvc \
+  test-x64 test-chain-x64 test-iso-x64 test-config-x64 test-win-x64 \
+  test-linux-x64 test-gop-x64 test-cd-bios test-cd-efi test-usb-bios \
+  test-usb-efi test-multivol-x64 test-parts-x64 test-pwd-x64 \
+  test-pwddeny-x64 \
+  test-aa64 test-chain-aa64 test-iso-aa64 test-config-aa64 \
+  test-linux-aa64 test-gop-aa64 test-pwd-aa64 test-pwddeny-aa64
+	@echo "test-all: full matrix green"
 
 all: bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64 hello-x64 hello-aa64
 
