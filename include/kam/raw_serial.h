@@ -6,30 +6,21 @@
  * AArch64 (platform-specific; virt-only for now). */
 
 #include "types.h"
+#include "cpu.h"
 
 #if defined(__x86_64__)
 
-static inline kam_u8 kam_raw_inb(kam_u16 port) {
-    kam_u8 v;
-    __asm__ volatile("inb %1, %0" : "=a"(v) : "Nd"(port));
-    return v;
-}
-
-static inline void kam_raw_outb(kam_u16 port, kam_u8 v) {
-    __asm__ volatile("outb %0, %1" : : "a"(v), "Nd"(port));
-}
-
 static inline void kam_raw_serial_init(void) {
-    kam_raw_outb(0x3FB, 0x80);
-    kam_raw_outb(0x3F8, 0x01);
-    kam_raw_outb(0x3F9, 0x00);
-    kam_raw_outb(0x3FB, 0x03);
+    kam_cpu_outb(0x3FB, 0x80);
+    kam_cpu_outb(0x3F8, 0x01);
+    kam_cpu_outb(0x3F9, 0x00);
+    kam_cpu_outb(0x3FB, 0x03);
 }
 
 static inline void kam_raw_putc(char c) {
-    while ((kam_raw_inb(0x3FD) & 0x20) == 0) {
+    while ((kam_cpu_inb(0x3FD) & 0x20) == 0) {
     }
-    kam_raw_outb(0x3F8, (kam_u8)c);
+    kam_cpu_outb(0x3F8, (kam_u8)c);
 }
 
 #elif defined(__aarch64__)
@@ -80,16 +71,8 @@ static inline void kam_raw_put_u64(kam_u64 v) {
 }
 
 static inline void kam_raw_halt(void) {
-#if defined(__x86_64__)
     for (;;)
-        __asm__ volatile("hlt");
-#elif defined(__aarch64__)
-    for (;;)
-        __asm__ volatile("wfi");
-#else
-    for (;;) {
-    }
-#endif
+        kam_cpu_halt();
 }
 
 #endif

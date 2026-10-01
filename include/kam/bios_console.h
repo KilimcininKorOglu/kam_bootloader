@@ -6,6 +6,7 @@
 
 #include "types.h"
 #include "bios_addrs.h"
+#include "cpu.h"
 
 #define KAM_VGA_BASE ((volatile kam_u16 *)0xB8000u)
 #define KAM_VGA_COLS 80u
@@ -14,27 +15,17 @@
 static kam_u8 kam_vga_row;
 static kam_u8 kam_vga_col;
 
-static inline void kam_outb(kam_u16 port, kam_u8 v) {
-    __asm__ volatile("outb %0, %1" : : "a"(v), "Nd"(port));
-}
-
-static inline kam_u8 kam_inb(kam_u16 port) {
-    kam_u8 v;
-    __asm__ volatile("inb %1, %0" : "=a"(v) : "Nd"(port));
-    return v;
-}
-
 static inline void kam_serial_init(void) {
-    kam_outb(0x3FB, 0x80);
-    kam_outb(0x3F8, 0x01); /* divisor 1 = 115200 */
-    kam_outb(0x3F9, 0x00);
-    kam_outb(0x3FB, 0x03); /* 8N1 */
+    kam_cpu_outb(0x3FB, 0x80);
+    kam_cpu_outb(0x3F8, 0x01); /* divisor 1 = 115200 */
+    kam_cpu_outb(0x3F9, 0x00);
+    kam_cpu_outb(0x3FB, 0x03); /* 8N1 */
 }
 
 static inline void kam_serial_putc(char c) {
-    while ((kam_inb(0x3FD) & 0x20) == 0) {
+    while ((kam_cpu_inb(0x3FD) & 0x20) == 0) {
     }
-    kam_outb(0x3F8, (kam_u8)c);
+    kam_cpu_outb(0x3F8, (kam_u8)c);
 }
 
 static inline void kam_vga_clear(void) {

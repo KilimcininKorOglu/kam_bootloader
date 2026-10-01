@@ -20,7 +20,7 @@ KAM_HEADERS := include/kam/efi.h include/kam/types.h include/kam/console.h \
                include/kam/memmap.h include/kam/elf.h include/kam/raw_serial.h \
                include/kam/scan.h include/kam/iso.h include/kam/config.h \
                include/kam/gop.h include/kam/linux.h include/kam/bzimage.h \
-               include/kam/sha256.h include/kam/bootlog.h
+               include/kam/sha256.h include/kam/bootlog.h include/kam/cpu.h
 KERN_HEADERS := include/kam/types.h include/kam/memmap.h \
                 include/kam/elf.h include/kam/raw_serial.h \
                 include/kam/bzimage.h
@@ -31,7 +31,7 @@ KCFLAGS  := -ffreestanding -nostdlib -fno-stack-protector \
             -fno-unwind-tables -fno-asynchronous-unwind-tables \
             -mno-red-zone -Wall -Wextra -O2 -Iinclude -c
 
-.PHONY: all bios bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64 hello-x64 hello-aa64 esp testiso run-x64 run-aa64 run-bios test-x64 test-aa64 test-chain-x64 test-chain-aa64 test-iso-x64 test-iso-aa64 test-config-x64 test-config-aa64 test-gop-x64 test-gop-aa64 test-win-x64 test-linux-x64 test-linux-aa64 test-cd-bios test-cd-efi test-usb-bios test-usb-efi test-multivol-x64 test-parts-x64 test-pwd-x64 test-pwddeny-x64 test-pwd-aa64 test-pwddeny-aa64 test-bios unittest clean
+.PHONY: all bios bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64 hello-x64 hello-aa64 esp testiso run-x64 run-aa64 run-bios test-x64 test-aa64 test-chain-x64 test-chain-aa64 test-iso-x64 test-iso-aa64 test-config-x64 test-config-aa64 test-gop-x64 test-gop-aa64 test-win-x64 test-linux-x64 test-linux-aa64 test-cd-bios test-cd-efi test-usb-bios test-usb-efi test-multivol-x64 test-parts-x64 test-pwd-x64 test-pwddeny-x64 test-pwd-aa64 test-pwddeny-aa64 test-bios unittest check-msvc clean
 
 all: bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64 hello-x64 hello-aa64
 
@@ -51,6 +51,28 @@ check-uefi:
 	  -Iinclude --target=x86_64-unknown-windows src/uefi/kam.c && echo "UEFI x64 syntax OK"
 	$(LLVM)/clang -fsyntax-only -ffreestanding -fshort-wchar -Wall -Wextra \
 	  -Iinclude --target=aarch64-unknown-windows src/uefi/kam.c && echo "UEFI aa64 syntax OK"
+
+# MSVC-compat check (clang-cl, compile only, objects discarded).
+# stage2_main.c is x86-only by design, hence absent from the aa64 list.
+CLANG_CL := /opt/homebrew/opt/llvm/bin/clang-cl
+CL_X64 := $(CLANG_CL) /c /Iinclude --target=x86_64-windows
+CL_AA64 := $(CLANG_CL) /c /Iinclude --target=aarch64-windows
+CL_SRCS_X64 := src/uefi/kam.c src/uefi/scan.c src/uefi/iso.c \
+               src/uefi/config.c src/uefi/gop.c src/uefi/linux.c \
+               src/uefi/sha256.c src/uefi/bootlog.c src/uefi/hello.c \
+               src/uefi/hello2.c src/uefi/hello3.c src/bios/stage2_main.c
+CL_SRCS_AA64 := src/uefi/kam.c src/kernel/kam_kernel.c src/linux/vmlinuz.c
+
+check-msvc:
+	@mkdir -p $(BUILD)
+	@for f in $(CL_SRCS_X64); do \
+	  $(CL_X64) $$f /Fobuild/cltest.obj || exit 1; \
+	done
+	@for f in $(CL_SRCS_AA64); do \
+	  $(CL_AA64) $$f /Fobuild/cltest.obj || exit 1; \
+	done
+	@rm -f $(BUILD)/cltest.obj
+	@echo "MSVC-compat: clang-cl clean on x64 + aa64"
 
 # A real .efi link needs ld.lld: brew install lld
 LD_LLD := $(shell command -v ld.lld 2>/dev/null || echo $(LLVM)/ld.lld)

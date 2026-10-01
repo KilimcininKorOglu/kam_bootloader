@@ -6,6 +6,7 @@
 #include "kam/efi.h"
 #include "kam/memmap.h"
 #include "kam/bzimage.h"
+#include "kam/cpu.h"
 
 typedef void (*kam_bz_entry_fn)(const kam_u8 *params);
 
@@ -141,7 +142,7 @@ int kam_bz_boot(struct kam_boot_services *bs, const kam_u8 *img,
 
     /* Publish the params address through the mailbox, then jump. */
     *(volatile kam_u64 *)(kam_usize)KAM_BZ_MBOX = params_addr;
-#if defined(__x86_64__)
+#if defined(__x86_64__) && KAM_GNU_ASM
     __asm__ volatile("mov %0, %%rdi\n\t"
                      "mov %1, %%rsi\n\t"
                      "call *%2"
