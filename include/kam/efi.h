@@ -118,6 +118,8 @@ typedef kam_status_t (*kam_handle_proto_fn)(kam_handle_t handle,
                                              const kam_guid_t *guid,
                                              void **iface);
 typedef kam_status_t (*kam_stall_fn)(kam_usize microseconds);
+typedef kam_status_t (*kam_locate_proto_fn)(const kam_guid_t *guid,
+                                             void *reg, void **iface);
 typedef kam_status_t (*kam_load_image_fn)(kam_u8 policy, kam_handle_t parent,
                                            const void *path, void *src,
                                            kam_usize size, kam_handle_t *out);
@@ -232,8 +234,58 @@ struct kam_boot_services {
     kam_exit_bs_fn exit_bs; /* +232 */
     void *getnextcount;     /* +240 */
     kam_stall_fn stall;     /* +248 */
+    void *setwatchdog;      /* +256 */
+    void *connect;          /* +264 */
+    void *disconnect;       /* +272 */
+    void *openproto;        /* +280 */
+    void *closeproto;       /* +288 */
+    void *openprotoinfo;    /* +296 */
+    void *protosperhandle;  /* +304 */
+    void *locatehandlebuf;  /* +312 */
+    kam_locate_proto_fn locateproto; /* +320 */
 };
 
-KAM_STATIC_ASSERT(sizeof(kam_boot_services_t) == 256, boot_services_size);
+KAM_STATIC_ASSERT(sizeof(kam_boot_services_t) == 328, boot_services_size);
+
+/* GraphicsOutputProtocol GUID. */
+static const kam_guid_t KAM_GUID_GOP = {
+    0x9042A9DE, 0x23DC, 0x4A38,
+    {0x96, 0xFB, 0x7A, 0xDE, 0xD0, 0x80, 0x51, 0x6A}};
+
+/* EFI_GRAPHICS_OUTPUT_PROTOCOL head + mode layout (offsets per spec). */
+typedef struct kam_gop_info {
+    kam_u32 ver;
+    kam_u32 w;
+    kam_u32 h;
+    kam_u32 fmt; /* 0 RGBR, 1 BGRR, 2 BitMask, 3 BltOnly */
+    kam_u32 red_mask;
+    kam_u32 green_mask;
+    kam_u32 blue_mask;
+    kam_u32 resv_mask;
+    kam_u32 ppsl;
+} kam_gop_info_t;
+
+typedef struct kam_gop_mode {
+    kam_u32 maxmode;  /* +0 */
+    kam_u32 mode;     /* +4, no pad: +8 is already 8-aligned */
+    kam_gop_info_t *info;     /* +8 */
+    kam_usize info_size;      /* +16 */
+    kam_u64 fb_base;          /* +24 */
+    kam_usize fb_size;        /* +32 */
+} kam_gop_mode_t;
+
+KAM_STATIC_ASSERT(sizeof(kam_gop_mode_t) == 40, gop_mode_size);
+
+typedef kam_status_t (*kam_gop_query_fn)(void *self, kam_u32 mode,
+                                         kam_usize *size,
+                                         kam_gop_info_t **info);
+typedef kam_status_t (*kam_gop_set_fn)(void *self, kam_u32 mode);
+
+typedef struct kam_gop {
+    kam_gop_query_fn query;
+    kam_gop_set_fn set_mode;
+    void *blt;
+    kam_gop_mode_t *mode;
+} kam_gop_t;
 
 #endif
