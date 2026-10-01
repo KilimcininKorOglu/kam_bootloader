@@ -29,7 +29,7 @@ KCFLAGS  := -ffreestanding -nostdlib -fno-stack-protector \
             -fno-unwind-tables -fno-asynchronous-unwind-tables \
             -mno-red-zone -Wall -Wextra -O2 -Iinclude -c
 
-.PHONY: all bios bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64 hello-x64 hello-aa64 esp testiso run-x64 run-aa64 run-bios test-x64 test-aa64 test-chain-x64 test-chain-aa64 test-iso-x64 test-iso-aa64 test-config-x64 test-config-aa64 test-gop-x64 test-gop-aa64 test-bios clean
+.PHONY: all bios bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64 hello-x64 hello-aa64 esp testiso run-x64 run-aa64 run-bios test-x64 test-aa64 test-chain-x64 test-chain-aa64 test-iso-x64 test-iso-aa64 test-config-x64 test-config-aa64 test-gop-x64 test-gop-aa64 test-win-x64 test-bios clean
 
 all: bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64 hello-x64 hello-aa64
 
@@ -217,6 +217,30 @@ test-config-aa64: $(BUILD)/esp_cfg_aa64.img
 	python3 tools/drive_boot.py $(BUILD)/test_config_aa64.log 90 'KAM-HELLO' '' 55 -- \
 	  qemu-system-aarch64 -M virt -cpu cortex-a72 -bios $(QEMU_AA64_FW) \
 	  -drive format=raw,file=$(BUILD)/esp_cfg_aa64.img -nographic -net none -device ramfb
+
+# --- Windows stub layout (bootmgfw = HELLO copy, BCD/WIM marker stubs)
+$(BUILD)/WINMGFW.EFI: $(BUILD)/HELLOX64.EFI
+	cp $(BUILD)/HELLOX64.EFI $@
+
+$(BUILD)/win_bcd.stub:
+	printf 'KAM-WIN-STUB-BCD' > $@
+
+$(BUILD)/win_wim.stub:
+	printf 'KAM-WIN-STUB-WIM' > $@
+
+$(BUILD)/esp_win.img: uefi-x64 kernel-x64 hello-x64 testiso $(BUILD)/WINMGFW.EFI $(BUILD)/win_bcd.stub $(BUILD)/win_wim.stub
+	python3 tools/mkesp.py --out $@ --x64 $(BUILD)/BOOTX64.EFI --startup-nsh \
+	  --extra $(BUILD)/kernel-x64.elf:KAM/KERNEL.ELF \
+	  --extra $(BUILD)/HELLOX64.EFI:KAM/HELLO.EFI \
+	  --extra $(BUILD)/test.iso:KAM/TEST.ISO \
+	  --extra $(BUILD)/WINMGFW.EFI:EFI/Microsoft/Boot/bootmgfw.efi \
+	  --extra $(BUILD)/win_bcd.stub:EFI/Microsoft/Boot/BCD \
+	  --extra $(BUILD)/win_wim.stub:sources/install.wim
+
+test-win-x64: $(BUILD)/esp_win.img
+	python3 tools/drive_boot.py $(BUILD)/test_win_x64.log 40 'KAM-HELLO' '2' 20 -- \
+	  qemu-system-x86_64 -drive if=pflash,format=raw,readonly=on,file=$(QEMU_X64_FW) \
+	  -drive format=raw,file=$(BUILD)/esp_win.img -nographic -net none
 
 test-gop-x64: esp
 	python3 tools/shot_boot.py $(BUILD)/test_gop_x64.log 12 40 -- \
