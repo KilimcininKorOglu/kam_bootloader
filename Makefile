@@ -1,12 +1,12 @@
 # KAM Makefile
 BUILD   := build
-LLVM    := /opt/homebrew/opt/llvm/bin
+LLVM    ?= /opt/homebrew/opt/llvm/bin
 CC_X64  := $(LLVM)/clang --target=x86_64-unknown-windows
 CC_AA64 := $(LLVM)/clang --target=aarch64-unknown-windows
 CFLAGS  := -nostdlib -ffreestanding -fno-stack-protector -fshort-wchar \
            -mno-red-zone -Wall -Wextra -O2 -Iinclude -c
-QEMU_X64_FW := /opt/homebrew/share/qemu/edk2-x86_64-code.fd
-QEMU_AA64_FW := /opt/homebrew/share/qemu/edk2-aarch64-code.fd
+QEMU_X64_FW ?= /opt/homebrew/share/qemu/edk2-x86_64-code.fd
+QEMU_AA64_FW ?= /opt/homebrew/share/qemu/edk2-aarch64-code.fd
 LLVM_OBJCOPY := $(LLVM)/llvm-objcopy
 
 CC_BIOS  := $(LLVM)/clang --target=x86_64-unknown-linux-gnu
@@ -65,7 +65,7 @@ check-uefi:
 
 # MSVC-compat check (clang-cl, compile only, objects discarded).
 # stage2_main.c is x86-only by design, hence absent from the aa64 list.
-CLANG_CL := /opt/homebrew/opt/llvm/bin/clang-cl
+CLANG_CL ?= /opt/homebrew/opt/llvm/bin/clang-cl
 CL_X64 := $(CLANG_CL) /c /Iinclude --target=x86_64-windows
 CL_AA64 := $(CLANG_CL) /c /Iinclude --target=aarch64-windows
 CL_SRCS_X64 := src/uefi/kam.c src/uefi/scan.c src/uefi/iso.c \

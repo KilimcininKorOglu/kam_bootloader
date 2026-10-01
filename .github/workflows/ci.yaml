@@ -1,0 +1,30 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm llvm clang lld \
+            qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64
+
+      - name: Locate firmware
+        run: |
+          ls /usr/share/OVMF
+          ls /usr/share/AAVMF
+
+      - name: Full test matrix
+        run: |
+          X64_FW=$(ls /usr/share/OVMF/OVMF_CODE_4M.fd 2>/dev/null || ls /usr/share/OVMF/OVMF_CODE.fd)
+          AA64_FW=$(ls /usr/share/AAVMF/AAVMF_CODE.fd)
+          make test-all LLVM=/usr/bin CLANG_CL=/usr/bin/clang-cl \
+            QEMU_X64_FW="$X64_FW" QEMU_AA64_FW="$AA64_FW"
