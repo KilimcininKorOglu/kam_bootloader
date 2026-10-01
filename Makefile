@@ -30,7 +30,7 @@ KCFLAGS  := -ffreestanding -nostdlib -fno-stack-protector \
             -fno-unwind-tables -fno-asynchronous-unwind-tables \
             -mno-red-zone -Wall -Wextra -O2 -Iinclude -c
 
-.PHONY: all bios bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64 hello-x64 hello-aa64 esp testiso run-x64 run-aa64 run-bios test-x64 test-aa64 test-chain-x64 test-chain-aa64 test-iso-x64 test-iso-aa64 test-config-x64 test-config-aa64 test-gop-x64 test-gop-aa64 test-win-x64 test-linux-x64 test-linux-aa64 test-cd-bios test-cd-efi test-bios clean
+.PHONY: all bios bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64 hello-x64 hello-aa64 esp testiso run-x64 run-aa64 run-bios test-x64 test-aa64 test-chain-x64 test-chain-aa64 test-iso-x64 test-iso-aa64 test-config-x64 test-config-aa64 test-gop-x64 test-gop-aa64 test-win-x64 test-linux-x64 test-linux-aa64 test-cd-bios test-cd-efi test-usb-bios test-usb-efi test-bios clean
 
 all: bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64 hello-x64 hello-aa64
 
@@ -330,6 +330,26 @@ test-cd-efi: $(BUILD)/cd.iso
 	python3 tools/drive_boot.py $(BUILD)/test_cd_efi.log 60 'KAM-KERNEL' '' 30 -- \
 	  qemu-system-x86_64 -drive if=pflash,format=raw,readonly=on,file=$(QEMU_X64_FW) \
 	  -drive file=$(BUILD)/cd.iso,media=cdrom -nographic -net none
+
+# --- Bootable USB stick (MBR table + gap payload + ESP partition)
+$(BUILD)/usb.img: bios-img esp
+	python3 tools/mkusb.py --mbr $(BUILD)/mbr.bin \
+	  --stage2 $(BUILD)/stage2.bin --kernel $(BUILD)/kernel-x64.elf \
+	  --esp $(BUILD)/esp.img --out $@
+
+test-usb-bios: $(BUILD)/usb.img
+	timeout 30 qemu-system-x86_64 -drive file=$(BUILD)/usb.img,format=raw,if=none,id=U \
+	  -device qemu-xhci -device usb-storage,drive=U -boot order=d \
+	  -nographic -net none > $(BUILD)/test_usb_bios.log 2>&1; \
+	grep -a -q "KAM-KERNEL" $(BUILD)/test_usb_bios.log && \
+	echo "PASS: BIOS USB boot reached the kernel" || \
+	(echo "FAIL: no KAM-KERNEL from USB"; tr -d '\0' < $(BUILD)/test_usb_bios.log | tail -n 8; exit 1)
+
+test-usb-efi: $(BUILD)/usb.img
+	python3 tools/drive_boot.py $(BUILD)/test_usb_efi.log 60 'KAM-KERNEL' '' 30 -- \
+	  qemu-system-x86_64 -drive if=pflash,format=raw,readonly=on,file=$(QEMU_X64_FW) \
+	  -drive file=$(BUILD)/usb.img,format=raw,if=none,id=U \
+	  -device qemu-xhci -device usb-storage,drive=U -nographic -net none
 
 test-gop-x64: esp
 	python3 tools/shot_boot.py $(BUILD)/test_gop_x64.log 12 40 -- \
