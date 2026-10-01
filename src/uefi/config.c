@@ -1,5 +1,5 @@
 /* KAM.INI parser. Single pass over lines, no allocation, bounded copies.
- * Returns the number of entries with a non-empty path. */
+ * Fills the config struct: entries with a non-empty path survive. */
 
 #include "kam/config.h"
 
@@ -29,7 +29,7 @@ static int kam_word_eq(const kam_u8 *s, kam_usize n, const char *w) {
     return i == n;
 }
 
-/* ASCII -> CHAR16 path copy with '/' fixups. Returns 0 when truncated. */
+/* ASCII -> CHAR16 path copy with '/' fixups. Nonzero when truncated. */
 static int kam_copy_path(kam_char16 *dst, const kam_u8 *s, kam_usize n) {
     kam_usize i = 0, j = 0;
     if (n == 0 || n >= KAM_PATH_CHARS)

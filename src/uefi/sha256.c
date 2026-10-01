@@ -1,5 +1,5 @@
 /* KAM SHA-256. Textbook Merkle-Damgard, 32-bit words, big-endian
- * padding. Written from the FIPS 180-4 pseudocode, no copies. */
+ * padding, following FIPS 180-4. */
 
 #include "kam/sha256.h"
 

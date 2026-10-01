@@ -44,10 +44,9 @@ def main():
     if len(mbr) != SECTOR or mbr[510:512] != b"\x55\xAA":
         print("mkusb: mbr must be a 512B signed sector", file=sys.stderr)
         return 1
-    code_end = next((i for i in range(MBR_CODE - 1, -1, -1)
-                     if mbr[i] != 0), -1) + 1
-    if code_end > MBR_CODE:
-        print("mkusb: mbr code exceeds 446 bytes", file=sys.stderr)
+    if any(mbr[MBR_CODE:510]):
+        print("mkusb: mbr code spills past 446 bytes, table would "
+              "truncate it", file=sys.stderr)
         return 1
     if len(stage2) > 16 * SECTOR:
         print("mkusb: stage2 must fit 16 sectors", file=sys.stderr)
@@ -80,8 +79,7 @@ def main():
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     with open(a.out, "wb") as f:
         f.write(bytes(img))
-    print(f"mkusb: {a.out} ({len(img)//1024//1024}MB, "
-          f"mbr code {code_end}B)")
+    print(f"mkusb: {a.out} ({len(img)//1024//1024}MB)")
     return 0
 
 

@@ -38,9 +38,3 @@ make test-all   # full matrix: BIOS + UEFI x64/aa64 + media + host checks
 Single targets: `make test-bios`, `make test-x64`, `make test-aa64`,
 `make test-cd-bios`, `make test-cd-efi`, `make test-usb-bios`,
 `make test-usb-efi`, `make unittest`, `make check-msvc`.
-
-## Principles
-
-1. Separate entry per arch, shared C core.
-2. Small binaries. Boot is I/O-bound: speed lives in disk + firmware.
-3. No phase is done without a passing test (QEMU or host).

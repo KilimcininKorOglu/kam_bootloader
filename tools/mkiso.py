@@ -56,7 +56,7 @@ def main():
     ap.add_argument("--bootable", action="store_true",
                     help="El Torito bootable layout (BIOS + UEFI entries)")
     ap.add_argument("--stage2", default=None,
-                    help="16-sector BIOS stage2 payload (goes to LBA 1)")
+                    help="BIOS stage2 payload, max 8KB (goes to LBA 1)")
     ap.add_argument("--kernel", default=None,
                     help="kernel file staged at KERNEL_LBA")
     ap.add_argument("--kernel-lba", type=int, default=145)
@@ -143,8 +143,9 @@ def main():
             print("mkiso: stage2 must fit 4 CD sectors (8KB, CD MBR "
                   "loads 4x2048)", file=sys.stderr)
             return 1
-        if len(kernel) > 128 * SECTOR:
-            print("mkiso: kernel must fit 128 sectors", file=sys.stderr)
+        if len(kernel) > 32 * SECTOR:
+            print("mkiso: kernel must fit 32 CD sectors (64KB, CD MBR "
+                  "loads 32x2048)", file=sys.stderr)
             return 1
         if len(mbr) != 512 or len(efiimg) % SECTOR != 0:
             print("mkiso: mbr must be 512 bytes (1 BIOS sector), "

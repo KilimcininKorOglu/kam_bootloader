@@ -1,9 +1,8 @@
 /* KAM UEFI application. x86_64 + AArch64 from a single source.
  * Freestanding C, no libc.
  *
- * Flow: banner -> scan ESP (KERNEL.ELF first, then *.EFI) -> menu ->
- * ELF direct-boot (map, alloc, ExitBootServices, jump) or EFI chainload
- * (LoadImage/StartImage, stays in boot services). */
+ * Flow: banner -> INI config + multi-volume scan -> menu ->
+ * ELF direct-boot, bzImage direct-boot, ISO probe, or EFI chainload. */
 
 #include "kam/efi.h"
 #include "kam/console.h"
@@ -288,19 +287,18 @@ static void kam_password_gate(kam_system_table_t *st) {
     kam_raw_halt();
 }
 
-static kam_system_table_t *kam_st;
-
+/* ISO probe: read the file, verify volume + catalog, report. */
 static void kam_thunk_puts(const char *s) {
-    kam_puts(kam_st, s);
+    kam_log(s);
 }
 
 static void kam_thunk_putc(char c) {
     char tmp[2] = {c, 0};
-    kam_puts(kam_st, tmp);
+    kam_log(tmp);
 }
 
 static void kam_thunk_putu(kam_u64 v) {
-    kam_put_u64(kam_st, v);
+    kam_log_u64(v);
 }
 
 /* ISO probe: read the file, verify volume + catalog, report. */
@@ -313,12 +311,12 @@ static kam_status_t kam_boot_iso(kam_boot_services_t *bs,
 
     s = kam_read_file(bs, root, path, &img, &size);
     if (KAM_EFI_ERROR(s)) {
-        kam_puts(kam_st, "KAM: iso file missing\n");
+        kam_log("KAM: iso file missing\n");
         return s;
     }
     if (kam_iso_boot_report(img, size, kam_thunk_puts, kam_thunk_putc,
                             kam_thunk_putu)) {
-        kam_puts(kam_st, "KAM: bad ISO image\n");
+        kam_log("KAM: bad ISO image\n");
         return KAM_EFI_UNSUPPORTED;
     }
     return KAM_EFI_SUCCESS;
@@ -552,7 +550,6 @@ kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
     if (!st || !st->con_out || !st->boot)
         return KAM_EFI_UNSUPPORTED;
     bs = st->boot;
-    kam_st = st;
     kam_log_init(st);
 
     /* No screen clear: ClearScreen is optional on some firmware. */

@@ -84,9 +84,9 @@ def main():
     found = []
 
     def dos83(name11):
-        base = name11[:8].decode("ascii", "replace").rstrip()
+        stem = name11[:8].decode("ascii", "replace").rstrip()
         ext = name11[8:].decode("ascii", "replace").rstrip()
-        return base + ("." + ext if ext else "")
+        return stem + ("." + ext if ext else "")
 
     def check_chain(cl, what):
         n = 0
@@ -136,7 +136,6 @@ def main():
                 pending_lfn = []
             attr = e[11]
             cl = struct.unpack_from("<H", e, 26)[0]
-            sz = struct.unpack_from("<I", e, 28)[0]
             disp = dos83(name11)
             if attr & 0x10:
                 if prefix is not None:

@@ -38,9 +38,3 @@ make test-all   # tam matris: BIOS + UEFI x64/aa64 + medya + host kontroller
 Tekil hedefler: `make test-bios`, `make test-x64`, `make test-aa64`,
 `make test-cd-bios`, `make test-cd-efi`, `make test-usb-bios`,
 `make test-usb-efi`, `make unittest`, `make check-msvc`.
-
-## Ilkeler
-
-1. Her arch icin ayri entry, ortak C cekirdek.
-2. Kucuk binary. Boot I/O-bound'dur: hiz diskte + firmware'dedir.
-3. Testi gecmeyen faz bitmis sayilmaz (QEMU veya host).

@@ -91,8 +91,6 @@ LD_LLD := $(shell command -v ld.lld 2>/dev/null || echo $(LLVM)/ld.lld)
 uefi-x64: $(BUILD)/BOOTX64.EFI
 uefi-aa64: $(BUILD)/BOOTAA64.EFI
 
-KAM_HEADERS := include/kam/efi.h include/kam/types.h include/kam/console.h
-
 $(BUILD)/kam_x64.o: src/uefi/kam.c $(KAM_HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC_X64) $(CFLAGS) src/uefi/kam.c -o $@

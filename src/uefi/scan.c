@@ -1,6 +1,7 @@
-/* KAM ESP scanner. Walks directories via FileProtocol reads, collects
- * KERNEL.ELF first and every other *.EFI after. Freestanding, no alloc:
- * fixed buffers, bounded depth, bounded entries. */
+/* KAM volume scanner. Walks directories via FileProtocol reads in three
+ * passes: KERNEL.ELF first, then every other *.EFI for chainloading,
+ * then *.ISO probes. Freestanding, no alloc: fixed buffers, bounded
+ * depth, bounded entries. */
 
 #include "kam/scan.h"
 
@@ -134,7 +135,7 @@ static kam_status_t kam_walk(kam_file_proto_t *dir, const kam_char16 *prefix,
                                                : (is_iso && !is_kernel && !is_efi);
                         if (*count < max && want &&
                             !kam_join(out[*count].path, prefix, name)) {
-                            kam_usize s, e;
+                            kam_usize bs0, be;
                             out[*count].kind = is_kernel ? KAM_ENTRY_ELF
                                              : is_efi   ? KAM_ENTRY_EFI
                                                         : KAM_ENTRY_ISO;
@@ -148,19 +149,19 @@ static kam_status_t kam_walk(kam_file_proto_t *dir, const kam_char16 *prefix,
                                     out[*count].cmdline[z] = 0;
                             }
                             /* Label = basename, ASCII. */
-                            s = 0;
-                            e = 0;
-                            while (out[*count].path[e]) {
-                                if (out[*count].path[e] == (kam_char16)'\\' ||
-                                    out[*count].path[e] == (kam_char16)'/')
-                                    s = e + 1;
-                                e++;
+                            bs0 = 0;
+                            be = 0;
+                            while (out[*count].path[be]) {
+                                if (out[*count].path[be] == (kam_char16)'\\' ||
+                                    out[*count].path[be] == (kam_char16)'/')
+                                    bs0 = be + 1;
+                                be++;
                             }
                             {
                                 kam_usize li = 0;
-                                while (s + li < e &&
+                                while (bs0 + li < be &&
                                        li + 1 < KAM_LABEL_CHARS) {
-                                    kam_char16 c = out[*count].path[s + li];
+                                    kam_char16 c = out[*count].path[bs0 + li];
                                     out[*count].label[li] =
                                         (char)(c < 128 ? c : '?');
                                     li++;

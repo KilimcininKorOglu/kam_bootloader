@@ -2,8 +2,8 @@
 #define KAM_SCAN_H
 
 /* ESP scan: collect bootable files into a small entry list.
- * Pass 1 pins KAM/KERNEL.ELF (or any KERNEL.ELF) as entry 0;
- * pass 2 adds every other *.EFI for chainloading. */
+ * Pass 1 pins KERNEL.ELF as entry 0; pass 2 adds every other *.EFI for
+ * chainloading; pass 3 adds *.ISO probes. */
 
 #include "efi.h"
 

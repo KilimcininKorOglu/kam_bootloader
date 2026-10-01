@@ -2,12 +2,15 @@
 """KAM mkesp: build a partitioned ESP disk image in pure python (no mtools).
 Usage: mkesp.py --out build/esp.img --x64 build/BOOTX64.EFI [--aa64 build/BOOTAA64.EFI]
 
-Layout: MBR with one bootable FAT16 partition (type 0x0E) + FAT16 volume.
-A partition table is required: OVMF/EDK2 only auto-boot
-EFI/BOOT/BOOT{ARCH}.EFI from a partitioned hard disk, not a superfloppy.
+Layout: MBR with a bootable FAT16 ESP partition (type 0x0E), optional
+second data partition (--data-mb), or a partitionless superfloppy
+(--superfloppy, for El Torito EFI boot images). A partition table is
+required: OVMF/EDK2 only auto-boot EFI/BOOT/BOOT{ARCH}.EFI from a
+partitioned hard disk, not a superfloppy.
 """
 import argparse
 import os
+import stat as statmod
 import struct
 import sys
 
@@ -297,8 +300,7 @@ def build_disk(vol, vol2=None):
         start2 = (total + 2048 - 1) // 2048 * 2048
         parts.append((0x00, start2, len(vol2) // SECTOR))
         total = start2 + len(vol2) // SECTOR
-    # --- MBR with FAT16-LBA partitions (skipped for El Torito EFI images:
-    # those must be plain FAT volumes) ---
+    # --- MBR with FAT16-LBA partitions ---
     disk_sectors = total
     img = bytearray(disk_sectors * SECTOR)
     mbr = bytearray(SECTOR)
@@ -342,7 +344,6 @@ def main():
     ap.add_argument('--force', action='store_true',
                     help='overwrite an existing output file')
     a = ap.parse_args()
-    import stat as statmod
     if a.out.startswith('/dev/') or (
             os.path.exists(a.out) and not os.path.isfile(a.out)):
         print(f'mkesp: refusing device path {a.out}', file=sys.stderr)
@@ -396,7 +397,8 @@ def main():
     os.makedirs(os.path.dirname(a.out) or '.', exist_ok=True)
     with open(a.out, 'wb') as f:
         f.write(img)
-    print(f'mkesp: {a.out} ({len(img)//1024//1024}MB, {len(files)} files)')
+    print(f'mkesp: {a.out} ({len(img)//1024//1024}MB, '
+          f'{len(files) + len(extras)} files)')
     return 0
 
 if __name__ == '__main__':

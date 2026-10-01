@@ -2,8 +2,8 @@
 #define KAM_ISO_H
 
 /* Read-only ISO9660 + El Torito probe. Parses a resident image (already
- * read into RAM), prints the volume layout through caller callbacks,
- * returns 0 when the test image matches every expectation. */
+ * read into RAM), reports the volume layout through caller callbacks,
+ * returns 0 on a conforming image. */
 
 #include "types.h"
 

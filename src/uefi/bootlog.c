@@ -1,4 +1,4 @@
-/* KAM boot log. Linear buffer (stops when full), raw serial mirror,
+/* KAM boot log. Linear buffer (stops when full), ConOut mirror,
  * file flush through FileProtocol. */
 
 #include "kam/bootlog.h"

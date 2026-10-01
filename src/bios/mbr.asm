@@ -1,7 +1,7 @@
 ; KAM MBR boot sector. x86 16-bit real mode, 512 bytes.
-; prints "KAM", loads 16 sectors (stage2) via LBA
-; (int 0x13 AH=0x42) to 0x8000, then 128 sectors (KERNEL.ELF file)
-; from LBA 17 to 0x2000:0x0000, then far-jumps to stage2.
+; Prints "KAM", loads stage2 via LBA (int 0x13 AH=0x42) to 0x8000,
+; then the KERNEL.ELF file to 0x2000:0x0000, then far-jumps to stage2.
+; Counts/LBAs come from the defines below (disk vs CD-ROM variants).
 ; Boot drive is passed in DL (saved first, BIOS calls may clobber it).
 
 BITS 16
@@ -44,7 +44,7 @@ start:
     mov si, msg
     call puts
 
-    ; Stage2: 16 sectors from LBA 1 to 0x0000:0x8000.
+    ; Stage2 load to 0x0000:STAGE2_LOAD via the packet at DAP_ADDR.
     mov si, DAP_ADDR
     mov byte [si + 0], 16    ; size
     mov byte [si + 1], 0     ; reserved
@@ -66,7 +66,7 @@ start:
     jmp mbr_halt
 .stage_ok:
 
-    ; Kernel file: 128 sectors from LBA 17 to 0x2000:0x0000, in 2x64.
+    ; Kernel file load loop to KFILE_SEG:0x0000.
     mov word [k_seg], KFILE_SEG
     mov dword [k_lba], KFILE_LBA
     mov cx, KF_TOTAL / KF_CHUNK

@@ -8,11 +8,13 @@ Asserts: (5,5) orange header, (w-5,h-5) dark background, (25,80) white bar,
 """
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
 import time
 
+# Must match the constants and geometry in src/uefi/gop.c.
 ORANGE = (0xB4, 0x5A, 0x00)
 BG = (0x0A, 0x14, 0x1E)
 WHITE = (0xFF, 0xFF, 0xFF)
@@ -80,7 +82,6 @@ def main():
 
     with open(log, "rb") as f:
         data = f.read().replace(b"\0", b"")
-    import re
     m = re.search(rb"GOP (\d+)x(\d+)", data)
     if not m:
         print("FAIL: no GOP mode line (fallback text mode?)")

@@ -1,4 +1,4 @@
-; KAM BIOS stage2 trampoline. Loaded by the MBR at 0x8000 (16 sectors).
+; KAM BIOS stage2 trampoline. Loaded by the MBR at 0x8000.
 ; 16-bit real mode -> A20 -> E820 map -> protected mode -> paging ->
 ; 64-bit long mode -> call kam_bios_main (C payload at 0x8800).
 ; nasm -f bin, padded to exactly 2048 bytes (TIMES).

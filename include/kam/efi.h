@@ -188,7 +188,7 @@ struct kam_fs_proto {
     kam_open_volume_fn open_volume;
 };
 
-/* EFI_FILE_PROTOCOL: only open/read/getinfo are typed, rest reserved. */
+/* EFI_FILE_PROTOCOL with the methods we use typed. */
 struct kam_file_proto {
     kam_u64 rev;              /* +0 */
     kam_file_open_fn open;    /* +8 */
