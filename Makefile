@@ -31,7 +31,7 @@ KCFLAGS  := -ffreestanding -nostdlib -fno-stack-protector \
             -fno-unwind-tables -fno-asynchronous-unwind-tables \
             -mno-red-zone -Wall -Wextra -O2 -Iinclude -c
 
-.PHONY: all bios bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64 hello-x64 hello-aa64 esp testiso run-x64 run-aa64 run-bios test-x64 test-aa64 test-chain-x64 test-chain-aa64 test-iso-x64 test-iso-aa64 test-config-x64 test-config-aa64 test-gop-x64 test-gop-aa64 test-win-x64 test-linux-x64 test-linux-aa64 test-cd-bios test-cd-efi test-usb-bios test-usb-efi test-multivol-x64 test-pwd-x64 test-pwddeny-x64 test-pwd-aa64 test-pwddeny-aa64 test-bios clean
+.PHONY: all bios bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64 hello-x64 hello-aa64 esp testiso run-x64 run-aa64 run-bios test-x64 test-aa64 test-chain-x64 test-chain-aa64 test-iso-x64 test-iso-aa64 test-config-x64 test-config-aa64 test-gop-x64 test-gop-aa64 test-win-x64 test-linux-x64 test-linux-aa64 test-cd-bios test-cd-efi test-usb-bios test-usb-efi test-multivol-x64 test-pwd-x64 test-pwddeny-x64 test-pwd-aa64 test-pwddeny-aa64 test-bios unittest clean
 
 all: bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64 hello-x64 hello-aa64
 
@@ -279,6 +279,19 @@ test-multivol-x64: esp $(BUILD)/esp2.img
 	  qemu-system-x86_64 -drive if=pflash,format=raw,readonly=on,file=$(QEMU_X64_FW) \
 	  -drive format=raw,file=$(BUILD)/esp.img \
 	  -drive format=raw,file=$(BUILD)/esp2.img -nographic -net none
+
+# --- Host unit tests (pure logic + image structure, no firmware)
+$(BUILD)/unittest: tests/unittest.c src/uefi/iso.c src/uefi/config.c src/uefi/sha256.c include/kam/*.h
+	cc -I include tests/unittest.c src/uefi/iso.c src/uefi/config.c src/uefi/sha256.c -o $@ -Wall -Wextra
+
+unittest: testiso $(BUILD)/unittest
+	./$(BUILD)/unittest
+	python3 tools/mkesp.py --out $(BUILD)/ut.img --sectors 8192 --x64 /dev/null \
+	  --extra $(BUILD)/test.iso:KAM/TEST.ISO \
+	  --extra $(BUILD)/test.iso:KAM/VERYLONGNAME.TXT
+	python3 tools/imgcheck.py $(BUILD)/ut.img --expect KAM/TEST.ISO
+	python3 tools/imgcheck.py $(BUILD)/esp.img --expect KAM/KERNEL.ELF
+	@echo "unittest: images OK"
 
 # --- Password test images (hash of "kamboot", fixed test salt)
 $(BUILD)/testpwd.ini:
