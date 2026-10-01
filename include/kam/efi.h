@@ -55,20 +55,25 @@ typedef struct kam_boot_services {
     void *hdr[6]; /* Signature, revision, size... skipped, accessed by offset */
 } kam_boot_services_raw_t;
 
-/* SYSTEM_TABLE: minimal layout to reach ConsoleOut + BootServices. */
+/* SYSTEM_TABLE: minimal layout to reach ConsoleOut + BootServices.
+ * Offsets follow the UEFI spec: Hdr is 24 bytes (not pointer-sized),
+ * FirmwareRevision is 32-bit with 32-bit padding after it. */
 typedef struct kam_system_table {
-    void                   *hdr[6]; /* Header */
-    kam_char16             *firmware_vendor;
-    kam_u32                 firmware_rev;
-    kam_handle_t            console_in;
-    void                   *con_in;
-    kam_handle_t            console_out_handle;
-    kam_simple_text_out_t  *con_out;
-    void                   *stderr_;
-    void                   *con_err;
-    void                   *runtime;
-    struct kam_boot_services *boot;
+    kam_u8                  hdr[24]; /* Signature + Revision + Size + CRC + Reserved */
+    kam_char16             *firmware_vendor;    /* offset 24 */
+    kam_u32                 firmware_rev;        /* offset 32 */
+    kam_u32                 _pad0;               /* offset 36 */
+    kam_handle_t            console_in;          /* offset 40 */
+    void                   *con_in;              /* offset 48 */
+    kam_handle_t            console_out_handle;  /* offset 56 */
+    kam_simple_text_out_t  *con_out;             /* offset 64 */
+    kam_handle_t            stderr_handle;       /* offset 72 */
+    void                   *con_err;             /* offset 80 */
+    void                   *runtime;             /* offset 88 */
+    struct kam_boot_services *boot;              /* offset 96 */
 } kam_system_table_t;
+
+KAM_STATIC_ASSERT(sizeof(kam_system_table_t) == 104, system_table_size);
 
 /* UEFI entry signature: efi_main(ImageHandle, SystemTable). */
 typedef kam_status_t (*kam_efi_entry_t)(kam_handle_t, kam_system_table_t *);
