@@ -138,13 +138,21 @@ static kam_usize kam_menu(kam_system_table_t *st, kam_usize count,
     kam_put_u64(st, (kam_u64)(def + 1));
     kam_log(" in ");
     kam_put_u64(st, (kam_u64)timeout);
-    kam_log("s, press 1-9.\n");
+    if (count > 9)
+        kam_log("s, press 1-9,a-f.\n");
+    else
+        kam_log("s, press 1-9.\n");
     polls = (int)(timeout * 10);
     for (t = 0; t < polls; t++) {
         s = cin->read_key(cin, &key);
-        if (s == KAM_EFI_SUCCESS && key.unicode >= (kam_char16)'1' &&
-            key.unicode <= (kam_char16)'9') {
-            kam_usize sel = (kam_usize)(key.unicode - (kam_char16)'1');
+        if (s == KAM_EFI_SUCCESS) {
+            kam_usize sel = count;
+            if (key.unicode >= (kam_char16)'1' &&
+                key.unicode <= (kam_char16)'9')
+                sel = (kam_usize)(key.unicode - (kam_char16)'1');
+            else if (key.unicode >= (kam_char16)'a' &&
+                     key.unicode <= (kam_char16)'f')
+                sel = (kam_usize)(9 + key.unicode - (kam_char16)'a');
             if (sel < count)
                 return sel;
         }
