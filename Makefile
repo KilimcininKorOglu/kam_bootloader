@@ -31,7 +31,7 @@ KCFLAGS  := -ffreestanding -nostdlib -fno-stack-protector \
             -fno-unwind-tables -fno-asynchronous-unwind-tables \
             -mno-red-zone -Wall -Wextra -O2 -Iinclude -c
 
-.PHONY: all bios bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64 hello-x64 hello-aa64 esp testiso run-x64 run-aa64 run-bios test-x64 test-aa64 test-chain-x64 test-chain-aa64 test-iso-x64 test-iso-aa64 test-config-x64 test-config-aa64 test-gop-x64 test-gop-aa64 test-win-x64 test-linux-x64 test-linux-aa64 test-cd-bios test-cd-efi test-usb-bios test-usb-efi test-multivol-x64 test-pwd-x64 test-pwddeny-x64 test-pwd-aa64 test-pwddeny-aa64 test-bios unittest clean
+.PHONY: all bios bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64 hello-x64 hello-aa64 esp testiso run-x64 run-aa64 run-bios test-x64 test-aa64 test-chain-x64 test-chain-aa64 test-iso-x64 test-iso-aa64 test-config-x64 test-config-aa64 test-gop-x64 test-gop-aa64 test-win-x64 test-linux-x64 test-linux-aa64 test-cd-bios test-cd-efi test-usb-bios test-usb-efi test-multivol-x64 test-parts-x64 test-pwd-x64 test-pwddeny-x64 test-pwd-aa64 test-pwddeny-aa64 test-bios unittest clean
 
 all: bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64 hello-x64 hello-aa64
 
@@ -149,7 +149,7 @@ $(BUILD)/HELLOAA64.EFI: $(BUILD)/hello_aa64.o
 	  -out:$@ $(BUILD)/hello_aa64.o
 
 esp: uefi-x64 kernel-x64 hello-x64 testiso
-	python3 tools/mkesp.py --out $(BUILD)/esp.img --x64 $(BUILD)/BOOTX64.EFI --startup-nsh \
+	python3 tools/mkesp.py --out $(BUILD)/esp.img --force --x64 $(BUILD)/BOOTX64.EFI --startup-nsh \
 	  --extra $(BUILD)/kernel-x64.elf:KAM/KERNEL.ELF \
 	  --extra $(BUILD)/HELLOX64.EFI:KAM/HELLO.EFI \
 	  --extra $(BUILD)/test.iso:KAM/TEST.ISO
@@ -168,7 +168,7 @@ run-x64: esp
 	  -drive format=raw,file=$(BUILD)/esp.img -nographic -net none
 
 run-aa64: uefi-aa64
-	python3 tools/mkesp.py --out $(BUILD)/esp_aa64.img --aa64 $(BUILD)/BOOTAA64.EFI --startup-nsh
+	python3 tools/mkesp.py --out $(BUILD)/esp_aa64.img --force --aa64 $(BUILD)/BOOTAA64.EFI --startup-nsh
 	qemu-system-aarch64 -M virt -cpu cortex-a72 -bios $(QEMU_AA64_FW) \
 	  -drive format=raw,file=$(BUILD)/esp_aa64.img -nographic -net none -device ramfb
 
@@ -183,7 +183,7 @@ test-chain-x64: esp
 	  -drive format=raw,file=$(BUILD)/esp.img -nographic -net none
 
 test-aa64: uefi-aa64 kernel-aa64 hello-aa64 testiso
-	python3 tools/mkesp.py --out $(BUILD)/esp_aa64.img --aa64 $(BUILD)/BOOTAA64.EFI --startup-nsh \
+	python3 tools/mkesp.py --out $(BUILD)/esp_aa64.img --force --aa64 $(BUILD)/BOOTAA64.EFI --startup-nsh \
 	  --extra $(BUILD)/kernel-aa64.elf:KAM/KERNEL.ELF \
 	  --extra $(BUILD)/HELLOAA64.EFI:KAM/HELLO.EFI \
 	  --extra $(BUILD)/test.iso:KAM/TEST.ISO
@@ -197,7 +197,7 @@ test-iso-x64: esp
 	  -drive format=raw,file=$(BUILD)/esp.img -nographic -net none
 
 test-iso-aa64: uefi-aa64 kernel-aa64 hello-aa64 testiso
-	python3 tools/mkesp.py --out $(BUILD)/esp_aa64.img --aa64 $(BUILD)/BOOTAA64.EFI --startup-nsh \
+	python3 tools/mkesp.py --out $(BUILD)/esp_aa64.img --force --aa64 $(BUILD)/BOOTAA64.EFI --startup-nsh \
 	  --extra $(BUILD)/kernel-aa64.elf:KAM/KERNEL.ELF \
 	  --extra $(BUILD)/HELLOAA64.EFI:KAM/HELLO.EFI \
 	  --extra $(BUILD)/test.iso:KAM/TEST.ISO
@@ -213,14 +213,14 @@ $(BUILD)/testcfg.ini:
 	  '[chain]' 'label Hello Chain Entry' 'path \KAM\HELLO.EFI' > $@
 
 $(BUILD)/esp_cfg.img: uefi-x64 kernel-x64 hello-x64 testiso $(BUILD)/testcfg.ini
-	python3 tools/mkesp.py --out $@ --x64 $(BUILD)/BOOTX64.EFI --startup-nsh \
+	python3 tools/mkesp.py --out $@ --force --x64 $(BUILD)/BOOTX64.EFI --startup-nsh \
 	  --extra $(BUILD)/kernel-x64.elf:KAM/KERNEL.ELF \
 	  --extra $(BUILD)/HELLOX64.EFI:KAM/HELLO.EFI \
 	  --extra $(BUILD)/test.iso:KAM/TEST.ISO \
 	  --extra $(BUILD)/testcfg.ini:KAM/KAM.INI
 
 $(BUILD)/esp_cfg_aa64.img: uefi-aa64 kernel-aa64 hello-aa64 testiso $(BUILD)/testcfg.ini
-	python3 tools/mkesp.py --out $@ --aa64 $(BUILD)/BOOTAA64.EFI --startup-nsh \
+	python3 tools/mkesp.py --out $@ --force --aa64 $(BUILD)/BOOTAA64.EFI --startup-nsh \
 	  --extra $(BUILD)/kernel-aa64.elf:KAM/KERNEL.ELF \
 	  --extra $(BUILD)/HELLOAA64.EFI:KAM/HELLO.EFI \
 	  --extra $(BUILD)/test.iso:KAM/TEST.ISO \
@@ -247,7 +247,7 @@ $(BUILD)/win_wim.stub:
 	printf 'KAM-WIN-STUB-WIM' > $@
 
 $(BUILD)/esp_win.img: uefi-x64 kernel-x64 hello-x64 testiso $(BUILD)/WINMGFW.EFI $(BUILD)/win_bcd.stub $(BUILD)/win_wim.stub
-	python3 tools/mkesp.py --out $@ --x64 $(BUILD)/BOOTX64.EFI --startup-nsh \
+	python3 tools/mkesp.py --out $@ --force --x64 $(BUILD)/BOOTX64.EFI --startup-nsh \
 	  --extra $(BUILD)/kernel-x64.elf:KAM/KERNEL.ELF \
 	  --extra $(BUILD)/HELLOX64.EFI:KAM/HELLO.EFI \
 	  --extra $(BUILD)/test.iso:KAM/TEST.ISO \
@@ -270,8 +270,17 @@ $(BUILD)/HELLO2X64.EFI: $(BUILD)/hello2_x64.o
 	$(LD_LLD) -flavor link -subsystem:efi_application -entry:hello2_main \
 	  -out:$@ $(BUILD)/hello2_x64.o
 
+$(BUILD)/hello3_x64.o: src/uefi/hello3.c $(KAM_HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC_X64) $(CFLAGS) src/uefi/hello3.c -o $@
+
+$(BUILD)/HELLO3X64.EFI: $(BUILD)/hello3_x64.o
+	@test -x $(LD_LLD) || (echo "ld.lld missing: brew install lld"; exit 1)
+	$(LD_LLD) -flavor link -subsystem:efi_application -entry:hello3_main \
+	  -out:$@ $(BUILD)/hello3_x64.o
+
 $(BUILD)/esp2.img: $(BUILD)/HELLO2X64.EFI
-	python3 tools/mkesp.py --out $@ --sectors 16384 \
+	python3 tools/mkesp.py --out $@ --force --sectors 16384 \
 	  --extra $(BUILD)/HELLO2X64.EFI:HELLO2.EFI
 
 test-multivol-x64: esp $(BUILD)/esp2.img
@@ -280,17 +289,33 @@ test-multivol-x64: esp $(BUILD)/esp2.img
 	  -drive format=raw,file=$(BUILD)/esp.img \
 	  -drive format=raw,file=$(BUILD)/esp2.img -nographic -net none
 
+# --- Two-partition image (ESP + data) proving same-disk second volumes
+$(BUILD)/esp_parts.img: uefi-x64 kernel-x64 hello-x64 testiso $(BUILD)/HELLO3X64.EFI
+	python3 tools/mkesp.py --out $@ --force --x64 $(BUILD)/BOOTX64.EFI --startup-nsh \
+	  --extra $(BUILD)/kernel-x64.elf:KAM/KERNEL.ELF \
+	  --extra $(BUILD)/HELLOX64.EFI:KAM/HELLO.EFI \
+	  --extra $(BUILD)/test.iso:KAM/TEST.ISO \
+	  --data-mb 8 --data-extra $(BUILD)/HELLO3X64.EFI:HELLO3.EFI
+
+test-parts-x64: $(BUILD)/esp_parts.img
+	python3 tools/drive_boot.py $(BUILD)/test_parts_x64.log 70 'KAM-HELLO3' '4' 40 -- \
+	  qemu-system-x86_64 -drive if=pflash,format=raw,readonly=on,file=$(QEMU_X64_FW) \
+	  -drive format=raw,file=$(BUILD)/esp_parts.img -nographic -net none
+
 # --- Host unit tests (pure logic + image structure, no firmware)
 $(BUILD)/unittest: tests/unittest.c src/uefi/iso.c src/uefi/config.c src/uefi/sha256.c include/kam/*.h
 	cc -I include tests/unittest.c src/uefi/iso.c src/uefi/config.c src/uefi/sha256.c -o $@ -Wall -Wextra
 
 unittest: testiso $(BUILD)/unittest
 	./$(BUILD)/unittest
-	python3 tools/mkesp.py --out $(BUILD)/ut.img --sectors 8192 --x64 /dev/null \
+	python3 tools/mkesp.py --out $(BUILD)/ut.img --force --sectors 8192 --x64 /dev/null \
 	  --extra $(BUILD)/test.iso:KAM/TEST.ISO \
 	  --extra $(BUILD)/test.iso:KAM/VERYLONGNAME.TXT
 	python3 tools/imgcheck.py $(BUILD)/ut.img --expect KAM/TEST.ISO
 	python3 tools/imgcheck.py $(BUILD)/esp.img --expect KAM/KERNEL.ELF
+	python3 tools/isoinfo.py $(BUILD)/test.iso --sha256 | grep -q HELLO.TXT
+	python3 tools/mkesp.py --out /dev/null --force --x64 /dev/null 2>&1 | grep -q refusing
+	python3 tools/mkesp.py --out $(BUILD)/ut.img --sectors 8192 --x64 /dev/null 2>&1 | grep -q "use --force"
 	@echo "unittest: images OK"
 
 # --- Password test images (hash of "kamboot", fixed test salt)
@@ -300,12 +325,12 @@ $(BUILD)/testpwd.ini:
 	printf '%s\n' '' '[kernel]' 'label Pwd Kernel' 'path \KAM\KERNEL.ELF' >> $@
 
 $(BUILD)/esp_pwd.img: uefi-x64 kernel-x64 $(BUILD)/testpwd.ini
-	python3 tools/mkesp.py --out $@ --x64 $(BUILD)/BOOTX64.EFI --startup-nsh \
+	python3 tools/mkesp.py --out $@ --force --x64 $(BUILD)/BOOTX64.EFI --startup-nsh \
 	  --extra $(BUILD)/kernel-x64.elf:KAM/KERNEL.ELF \
 	  --extra $(BUILD)/testpwd.ini:KAM/KAM.INI
 
 $(BUILD)/esp_pwd_aa64.img: uefi-aa64 kernel-aa64 $(BUILD)/testpwd.ini
-	python3 tools/mkesp.py --out $@ --aa64 $(BUILD)/BOOTAA64.EFI --startup-nsh \
+	python3 tools/mkesp.py --out $@ --force --aa64 $(BUILD)/BOOTAA64.EFI --startup-nsh \
 	  --extra $(BUILD)/kernel-aa64.elf:KAM/KERNEL.ELF \
 	  --extra $(BUILD)/testpwd.ini:KAM/KAM.INI
 
@@ -362,13 +387,13 @@ $(BUILD)/testcfg-linux.ini:
 	  'initrd \KAM\INITRD.IMG' 'cmdline kam-test console=ttyS0' > $@
 
 $(BUILD)/esp_linux.img: uefi-x64 $(BUILD)/vmlinuz-x64.bin $(BUILD)/test_initrd.img $(BUILD)/testcfg-linux.ini
-	python3 tools/mkesp.py --out $@ --x64 $(BUILD)/BOOTX64.EFI --startup-nsh \
+	python3 tools/mkesp.py --out $@ --force --x64 $(BUILD)/BOOTX64.EFI --startup-nsh \
 	  --extra $(BUILD)/vmlinuz-x64.bin:KAM/VMLINUZ \
 	  --extra $(BUILD)/test_initrd.img:KAM/INITRD.IMG \
 	  --extra $(BUILD)/testcfg-linux.ini:KAM/KAM.INI
 
 $(BUILD)/esp_linux_aa64.img: uefi-aa64 $(BUILD)/vmlinuz-aa64.bin $(BUILD)/test_initrd.img $(BUILD)/testcfg-linux.ini
-	python3 tools/mkesp.py --out $@ --aa64 $(BUILD)/BOOTAA64.EFI --startup-nsh \
+	python3 tools/mkesp.py --out $@ --force --aa64 $(BUILD)/BOOTAA64.EFI --startup-nsh \
 	  --extra $(BUILD)/vmlinuz-aa64.bin:KAM/VMLINUZ \
 	  --extra $(BUILD)/test_initrd.img:KAM/INITRD.IMG \
 	  --extra $(BUILD)/testcfg-linux.ini:KAM/KAM.INI
@@ -389,7 +414,7 @@ $(BUILD)/mbr_cd.bin: src/bios/mbr.asm
 	nasm -f bin -DCDROM=1 $< -o $@
 
 $(BUILD)/esp_cd.img: uefi-x64 kernel-x64
-	python3 tools/mkesp.py --out $@ --sectors 16384 --superfloppy --x64 $(BUILD)/BOOTX64.EFI \
+	python3 tools/mkesp.py --out $@ --force --sectors 16384 --superfloppy --x64 $(BUILD)/BOOTX64.EFI \
 	  --extra $(BUILD)/kernel-x64.elf:KAM/KERNEL.ELF
 
 $(BUILD)/cd.iso: testiso bios $(BUILD)/stage2.bin $(BUILD)/kernel-x64.elf $(BUILD)/mbr_cd.bin $(BUILD)/esp_cd.img
@@ -435,7 +460,7 @@ test-gop-x64: esp
 	  -drive format=raw,file=$(BUILD)/esp.img -nographic -net none
 
 test-gop-aa64: uefi-aa64 kernel-aa64 hello-aa64 testiso
-	python3 tools/mkesp.py --out $(BUILD)/esp_aa64.img --aa64 $(BUILD)/BOOTAA64.EFI --startup-nsh \
+	python3 tools/mkesp.py --out $(BUILD)/esp_aa64.img --force --aa64 $(BUILD)/BOOTAA64.EFI --startup-nsh \
 	  --extra $(BUILD)/kernel-aa64.elf:KAM/KERNEL.ELF \
 	  --extra $(BUILD)/HELLOAA64.EFI:KAM/HELLO.EFI \
 	  --extra $(BUILD)/test.iso:KAM/TEST.ISO
@@ -444,7 +469,7 @@ test-gop-aa64: uefi-aa64 kernel-aa64 hello-aa64 testiso
 	  -drive format=raw,file=$(BUILD)/esp_aa64.img -nographic -net none -device ramfb
 
 test-chain-aa64: uefi-aa64 kernel-aa64 hello-aa64
-	python3 tools/mkesp.py --out $(BUILD)/esp_aa64.img --aa64 $(BUILD)/BOOTAA64.EFI --startup-nsh \
+	python3 tools/mkesp.py --out $(BUILD)/esp_aa64.img --force --aa64 $(BUILD)/BOOTAA64.EFI --startup-nsh \
 	  --extra $(BUILD)/kernel-aa64.elf:KAM/KERNEL.ELF \
 	  --extra $(BUILD)/HELLOAA64.EFI:KAM/HELLO.EFI
 	python3 tools/drive_boot.py $(BUILD)/test_chain_aa64.log 90 'KAM-HELLO' '2' 55 -- \

@@ -14,8 +14,10 @@ import sys
 SECTOR = 512
 PART_START = 2048  # 1MiB alignment, standard for ESPs
 
-def build_fat16(files, total_sectors=131072, startup_nsh=None, extras=None,
-                superfloppy=False):  # 64MiB volume
+def build_volume(files, total_sectors=131072, startup_nsh=None,
+                 extras=None):
+    """Build one FAT16 volume (no MBR). Shared by single- and dual-partition
+    images, and by the El Torito superfloppy path."""
     reserved = 4
     fats = 2
     root_entries = 512
@@ -278,26 +280,44 @@ def build_fat16(files, total_sectors=131072, startup_nsh=None, extras=None,
     # Root dir lives in the 32 sectors right before the data region.
     root_off = (first_data - root_sectors) * SECTOR
     vol[root_off:root_off + root_sectors * SECTOR] = root
+    return bytes(vol)
 
-    # --- MBR with one bootable FAT16-LBA partition (skipped for
-    # El Torito EFI images: those must be plain FAT volumes) ---
-    if superfloppy:
-        return bytes(vol)
-    disk_sectors = PART_START + total_sectors
+
+def build_disk(vol, vol2=None):
+    """Wrap volumes in an MBR partitioned disk: partition 1 bootable ESP,
+    optional partition 2 data. vol2 starts on a 1MB boundary."""
+    if len(vol) % SECTOR != 0:
+        raise RuntimeError('volume 1 misaligned')
+    vol1_sec = len(vol) // SECTOR
+    parts = [(0x80, PART_START, vol1_sec)]
+    total = PART_START + vol1_sec
+    if vol2 is not None:
+        if len(vol2) % SECTOR != 0:
+            raise RuntimeError('volume 2 misaligned')
+        start2 = (total + 2048 - 1) // 2048 * 2048
+        parts.append((0x00, start2, len(vol2) // SECTOR))
+        total = start2 + len(vol2) // SECTOR
+    # --- MBR with FAT16-LBA partitions (skipped for El Torito EFI images:
+    # those must be plain FAT volumes) ---
+    disk_sectors = total
     img = bytearray(disk_sectors * SECTOR)
     mbr = bytearray(SECTOR)
     struct.pack_into('<I', mbr, 440, 0x4B414D21)  # disk signature
-    # Partition entry 0 at offset 446: bootable, type 0x0E, LBA range.
-    p = 446
-    mbr[p + 0] = 0x80          # boot flag
-    mbr[p + 1:p + 4] = b'\xFF\xFF\xFF'  # start CHS (LBA-only)
-    mbr[p + 4] = 0x0E          # FAT16 LBA
-    mbr[p + 5:p + 8] = b'\xFF\xFF\xFF'  # end CHS (LBA-only)
-    struct.pack_into('<I', mbr, p + 8, PART_START)
-    struct.pack_into('<I', mbr, p + 12, total_sectors)
+    # Partition entries at 446/462: bootable ESP first, data second.
+    for i, (flag, start, size) in enumerate(parts):
+        p = 446 + i * 16
+        mbr[p + 0] = flag          # boot flag
+        mbr[p + 1:p + 4] = b'\xFF\xFF\xFF'  # start CHS (LBA-only)
+        mbr[p + 4] = 0x0E          # FAT16 LBA
+        mbr[p + 5:p + 8] = b'\xFF\xFF\xFF'  # end CHS (LBA-only)
+        struct.pack_into('<I', mbr, p + 8, start)
+        struct.pack_into('<I', mbr, p + 12, size)
     mbr[510:512] = b'\x55\xAA'
+    img = bytearray(total * SECTOR)
     img[0:SECTOR] = mbr
-    img[PART_START * SECTOR:] = vol
+    img[PART_START * SECTOR:PART_START * SECTOR + len(vol)] = vol
+    if vol2 is not None:
+        img[parts[1][1] * SECTOR:parts[1][1] * SECTOR + len(vol2)] = vol2
     return bytes(img)
 
 
@@ -315,7 +335,26 @@ def main():
     ap.add_argument('--superfloppy', action='store_true',
                     help='omit the MBR, volume starts at offset 0 '
                          '(El Torito EFI boot images)')
+    ap.add_argument('--data-mb', type=int, default=0,
+                    help='append a second FAT16 data partition of N MB')
+    ap.add_argument('--data-extra', action='append', default=[],
+                    help='data partition file as SRC:FATPATH (repeatable)')
+    ap.add_argument('--force', action='store_true',
+                    help='overwrite an existing output file')
     a = ap.parse_args()
+    import stat as statmod
+    if a.out.startswith('/dev/') or (
+            os.path.exists(a.out) and not os.path.isfile(a.out)):
+        print(f'mkesp: refusing device path {a.out}', file=sys.stderr)
+        return 1
+    if os.path.exists(a.out):
+        st = os.stat(a.out)
+        if statmod.S_ISBLK(st.st_mode) or statmod.S_ISCHR(st.st_mode):
+            print(f'mkesp: refusing device path {a.out}', file=sys.stderr)
+            return 1
+        if not a.force:
+            print(f'mkesp: {a.out} exists (use --force)', file=sys.stderr)
+            return 1
     files = []
     if a.x64:
         with open(a.x64, 'rb') as f:
@@ -333,9 +372,26 @@ def main():
         src, _, dst = item.partition(':')
         with open(src, 'rb') as f:
             extras.append((dst, f.read()))
-    img = build_fat16(files, total_sectors=a.sectors, startup_nsh=nsh,
-                      extras=extras, superfloppy=a.superfloppy)
-    expect = a.sectors if a.superfloppy else (PART_START + a.sectors)
+    vol = build_volume(files, total_sectors=a.sectors, startup_nsh=nsh,
+                       extras=extras)
+    if a.superfloppy:
+        if a.data_mb:
+            print('mkesp: --data-mb needs partitions', file=sys.stderr)
+            return 1
+        img = vol
+        expect = a.sectors
+    else:
+        vol2 = None
+        if a.data_mb:
+            data_extras = []
+            for item in a.data_extra:
+                src, _, dst = item.partition(':')
+                with open(src, 'rb') as f:
+                    data_extras.append((dst, f.read()))
+            vol2 = build_volume([], total_sectors=a.data_mb * 2048,
+                                extras=data_extras)
+        img = build_disk(vol, vol2)
+        expect = len(img) // SECTOR
     assert len(img) == expect * SECTOR, len(img)
     os.makedirs(os.path.dirname(a.out) or '.', exist_ok=True)
     with open(a.out, 'wb') as f:
