@@ -1,0 +1,17 @@
+# Build outputs
+build/
+
+# macOS noise
+.DS_Store
+
+# Editor noise
+.vscode/
+*.swp
+*~
+
+# QEMU leftovers
+*.img.qemu
+
+# Python noise
+*.pyc
+__pycache__/
