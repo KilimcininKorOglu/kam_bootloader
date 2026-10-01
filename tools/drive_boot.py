@@ -19,6 +19,8 @@ def main():
     qemu = sys.argv[7:]
     secs = int(secs)
     keysecs = float(keysecs)
+    # Backslash escapes in KEYS: \r = carriage return (submit).
+    keys = keys.replace("\\r", "\r")
 
     out = open(log, "wb")
     proc = subprocess.Popen(qemu, stdin=subprocess.PIPE, stdout=out,

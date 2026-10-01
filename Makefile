@@ -19,7 +19,8 @@ BIOS_HEADERS := include/kam/types.h include/kam/memmap.h \
 KAM_HEADERS := include/kam/efi.h include/kam/types.h include/kam/console.h \
                include/kam/memmap.h include/kam/elf.h include/kam/raw_serial.h \
                include/kam/scan.h include/kam/iso.h include/kam/config.h \
-               include/kam/gop.h include/kam/linux.h include/kam/bzimage.h
+               include/kam/gop.h include/kam/linux.h include/kam/bzimage.h \
+               include/kam/sha256.h
 KERN_HEADERS := include/kam/types.h include/kam/memmap.h \
                 include/kam/elf.h include/kam/raw_serial.h \
                 include/kam/bzimage.h
@@ -30,7 +31,7 @@ KCFLAGS  := -ffreestanding -nostdlib -fno-stack-protector \
             -fno-unwind-tables -fno-asynchronous-unwind-tables \
             -mno-red-zone -Wall -Wextra -O2 -Iinclude -c
 
-.PHONY: all bios bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64 hello-x64 hello-aa64 esp testiso run-x64 run-aa64 run-bios test-x64 test-aa64 test-chain-x64 test-chain-aa64 test-iso-x64 test-iso-aa64 test-config-x64 test-config-aa64 test-gop-x64 test-gop-aa64 test-win-x64 test-linux-x64 test-linux-aa64 test-cd-bios test-cd-efi test-usb-bios test-usb-efi test-multivol-x64 test-bios clean
+.PHONY: all bios bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64 hello-x64 hello-aa64 esp testiso run-x64 run-aa64 run-bios test-x64 test-aa64 test-chain-x64 test-chain-aa64 test-iso-x64 test-iso-aa64 test-config-x64 test-config-aa64 test-gop-x64 test-gop-aa64 test-win-x64 test-linux-x64 test-linux-aa64 test-cd-bios test-cd-efi test-usb-bios test-usb-efi test-multivol-x64 test-pwd-x64 test-pwddeny-x64 test-pwd-aa64 test-pwddeny-aa64 test-bios clean
 
 all: bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64 hello-x64 hello-aa64
 
@@ -107,15 +108,23 @@ $(BUILD)/linux_aa64.o: src/uefi/linux.c $(KAM_HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC_AA64) $(CFLAGS) src/uefi/linux.c -o $@
 
-$(BUILD)/BOOTX64.EFI: $(BUILD)/kam_x64.o $(BUILD)/scan_x64.o $(BUILD)/iso_x64.o $(BUILD)/config_x64.o $(BUILD)/gop_x64.o $(BUILD)/linux_x64.o linker/uefi_x64.ld
-	@test -x $(LD_LLD) || (echo "ld.lld missing: brew install lld"; exit 1)
-	$(LD_LLD) -flavor link -subsystem:efi_application -entry:efi_main \
-	  -out:$@ $(BUILD)/kam_x64.o $(BUILD)/scan_x64.o $(BUILD)/iso_x64.o $(BUILD)/config_x64.o $(BUILD)/gop_x64.o $(BUILD)/linux_x64.o
+$(BUILD)/sha_x64.o: src/uefi/sha256.c $(KAM_HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC_X64) $(CFLAGS) src/uefi/sha256.c -o $@
 
-$(BUILD)/BOOTAA64.EFI: $(BUILD)/kam_aa64.o $(BUILD)/scan_aa64.o $(BUILD)/iso_aa64.o $(BUILD)/config_aa64.o $(BUILD)/gop_aa64.o $(BUILD)/linux_aa64.o linker/uefi_aa64.ld
+$(BUILD)/sha_aa64.o: src/uefi/sha256.c $(KAM_HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC_AA64) $(CFLAGS) src/uefi/sha256.c -o $@
+
+$(BUILD)/BOOTX64.EFI: $(BUILD)/kam_x64.o $(BUILD)/scan_x64.o $(BUILD)/iso_x64.o $(BUILD)/config_x64.o $(BUILD)/gop_x64.o $(BUILD)/linux_x64.o $(BUILD)/sha_x64.o linker/uefi_x64.ld
 	@test -x $(LD_LLD) || (echo "ld.lld missing: brew install lld"; exit 1)
 	$(LD_LLD) -flavor link -subsystem:efi_application -entry:efi_main \
-	  -out:$@ $(BUILD)/kam_aa64.o $(BUILD)/scan_aa64.o $(BUILD)/iso_aa64.o $(BUILD)/config_aa64.o $(BUILD)/gop_aa64.o $(BUILD)/linux_aa64.o
+	  -out:$@ $(BUILD)/kam_x64.o $(BUILD)/scan_x64.o $(BUILD)/iso_x64.o $(BUILD)/config_x64.o $(BUILD)/gop_x64.o $(BUILD)/linux_x64.o $(BUILD)/sha_x64.o
+
+$(BUILD)/BOOTAA64.EFI: $(BUILD)/kam_aa64.o $(BUILD)/scan_aa64.o $(BUILD)/iso_aa64.o $(BUILD)/config_aa64.o $(BUILD)/gop_aa64.o $(BUILD)/linux_aa64.o $(BUILD)/sha_aa64.o linker/uefi_aa64.ld
+	@test -x $(LD_LLD) || (echo "ld.lld missing: brew install lld"; exit 1)
+	$(LD_LLD) -flavor link -subsystem:efi_application -entry:efi_main \
+	  -out:$@ $(BUILD)/kam_aa64.o $(BUILD)/scan_aa64.o $(BUILD)/iso_aa64.o $(BUILD)/config_aa64.o $(BUILD)/gop_aa64.o $(BUILD)/linux_aa64.o $(BUILD)/sha_aa64.o
 
 # --- HELLO.EFI chainload fixtures (entry: hello_main)
 $(BUILD)/hello_x64.o: src/uefi/hello.c $(KAM_HEADERS)
@@ -270,6 +279,42 @@ test-multivol-x64: esp $(BUILD)/esp2.img
 	  qemu-system-x86_64 -drive if=pflash,format=raw,readonly=on,file=$(QEMU_X64_FW) \
 	  -drive format=raw,file=$(BUILD)/esp.img \
 	  -drive format=raw,file=$(BUILD)/esp2.img -nographic -net none
+
+# --- Password test images (hash of "kamboot", fixed test salt)
+$(BUILD)/testpwd.ini:
+	@mkdir -p $(BUILD)
+	python3 tools/mkpasswd.py --password kamboot --salt KAMTESTSALT --timeout 5 > $@
+	printf '%s\n' '' '[kernel]' 'label Pwd Kernel' 'path \KAM\KERNEL.ELF' >> $@
+
+$(BUILD)/esp_pwd.img: uefi-x64 kernel-x64 $(BUILD)/testpwd.ini
+	python3 tools/mkesp.py --out $@ --x64 $(BUILD)/BOOTX64.EFI --startup-nsh \
+	  --extra $(BUILD)/kernel-x64.elf:KAM/KERNEL.ELF \
+	  --extra $(BUILD)/testpwd.ini:KAM/KAM.INI
+
+$(BUILD)/esp_pwd_aa64.img: uefi-aa64 kernel-aa64 $(BUILD)/testpwd.ini
+	python3 tools/mkesp.py --out $@ --aa64 $(BUILD)/BOOTAA64.EFI --startup-nsh \
+	  --extra $(BUILD)/kernel-aa64.elf:KAM/KERNEL.ELF \
+	  --extra $(BUILD)/testpwd.ini:KAM/KAM.INI
+
+test-pwd-x64: $(BUILD)/esp_pwd.img
+	python3 tools/drive_boot.py $(BUILD)/test_pwd_x64.log 40 'KAM-KERNEL' 'kamboot\r' 20 -- \
+	  qemu-system-x86_64 -drive if=pflash,format=raw,readonly=on,file=$(QEMU_X64_FW) \
+	  -drive format=raw,file=$(BUILD)/esp_pwd.img -nographic -net none
+
+test-pwddeny-x64: $(BUILD)/esp_pwd.img
+	python3 tools/drive_boot.py $(BUILD)/test_pwddeny_x64.log 60 'access denied' 'wrong\r' 40 -- \
+	  qemu-system-x86_64 -drive if=pflash,format=raw,readonly=on,file=$(QEMU_X64_FW) \
+	  -drive format=raw,file=$(BUILD)/esp_pwd.img -nographic -net none
+
+test-pwd-aa64: $(BUILD)/esp_pwd_aa64.img
+	python3 tools/drive_boot.py $(BUILD)/test_pwd_aa64.log 90 'KAM-KERNEL' 'kamboot\r' 55 -- \
+	  qemu-system-aarch64 -M virt -cpu cortex-a72 -bios $(QEMU_AA64_FW) \
+	  -drive format=raw,file=$(BUILD)/esp_pwd_aa64.img -nographic -net none -device ramfb
+
+test-pwddeny-aa64: $(BUILD)/esp_pwd_aa64.img
+	python3 tools/drive_boot.py $(BUILD)/test_pwddeny_aa64.log 120 'access denied' 'wrong\r' 80 -- \
+	  qemu-system-aarch64 -M virt -cpu cortex-a72 -bios $(QEMU_AA64_FW) \
+	  -drive format=raw,file=$(BUILD)/esp_pwd_aa64.img -nographic -net none -device ramfb
 
 # --- Linux fixture (flat bzImage speaking the boot protocol)
 $(BUILD)/vmlinuz_x64.o: src/linux/vmlinuz.c $(KERN_HEADERS)
