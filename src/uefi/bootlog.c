@@ -19,6 +19,14 @@ void kam_log_no_conout(void) {
     kam_log_con = 0;
 }
 
+/* Console only: bypasses the persisted buffer. For keystroke echo and
+ * other output that must never land in BOOT.LOG. */
+void kam_log_conout(const char *s) {
+    if (kam_log_con && kam_log_st && kam_log_st->con_out &&
+        kam_log_st->con_out->output_string)
+        kam_puts(kam_log_st, s);
+}
+
 static const kam_char16 KAM_LOG_PATH[] = {
     '\\', 'K', 'A', 'M', '\\', 'B', 'O', 'O', 'T', '.', 'L', 'O', 'G', 0};
 

@@ -18,6 +18,7 @@ struct kam_file_proto;
 void kam_log_init(struct kam_system_table *st);
 void kam_log_no_conout(void);
 void kam_log(const char *s);
+void kam_log_conout(const char *s);
 void kam_log_u64(kam_u64 v);
 void kam_log_hex(kam_u64 v);
 

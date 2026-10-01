@@ -299,7 +299,7 @@ static void kam_password_gate(kam_system_table_t *st) {
             }
             if (key.unicode >= 32 && key.unicode <= 126 && len + 1 < 64) {
                 pw[len++] = (char)key.unicode;
-                kam_log("*");
+                kam_log_conout("*");
             }
         }
         pw[len] = 0;
