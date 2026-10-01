@@ -2,7 +2,7 @@
  * and paints art straight into the linear framebuffer. */
 
 #include "kam/gop.h"
-#include "kam/efi.h">
+#include "kam/efi.h"
 
 #define KAM_BG_R 0x0Au
 #define KAM_BG_G 0x14u
