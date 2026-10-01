@@ -28,8 +28,6 @@ typedef kam_uintn kam_status_t;
 #define KAM_EFI_ERROR(s) (((kam_status_t)(s) & KAM_EFI_ERROR_BIT) != 0)
 
 struct kam_simple_text_out;
-struct kam_boot_services;
-struct kam_system_table;
 
 /* SIMPLE_TEXT_OUTPUT_PROTOCOL: only what we need. */
 typedef kam_status_t (*kam_text_out_fn)(
@@ -50,10 +48,8 @@ typedef struct kam_simple_text_out {
     void             *mode;
 } kam_simple_text_out_t;
 
-/* BOOT_SERVICES: only the head we need for now. */
-typedef struct kam_boot_services {
-    void *hdr[6]; /* Signature, revision, size... skipped, accessed by offset */
-} kam_boot_services_raw_t;
+/* Forward: full definition follows below (needed by kam_system_table_t). */
+typedef struct kam_boot_services kam_boot_services_t;
 
 /* SYSTEM_TABLE: minimal layout to reach ConsoleOut + BootServices.
  * Offsets follow the UEFI spec: Hdr is 24 bytes (not pointer-sized),
@@ -70,12 +66,67 @@ typedef struct kam_system_table {
     kam_handle_t            stderr_handle;       /* offset 72 */
     void                   *con_err;             /* offset 80 */
     void                   *runtime;             /* offset 88 */
-    struct kam_boot_services *boot;              /* offset 96 */
+    kam_boot_services_t    *boot;               /* offset 96 */
 } kam_system_table_t;
 
 KAM_STATIC_ASSERT(sizeof(kam_system_table_t) == 104, system_table_size);
 
 /* UEFI entry signature: efi_main(ImageHandle, SystemTable). */
 typedef kam_status_t (*kam_efi_entry_t)(kam_handle_t, kam_system_table_t *);
+
+/* EFI_MEMORY_DESCRIPTOR. Firmware may return a larger DescSize. */
+typedef struct kam_mem_desc {
+    kam_u32 type;
+    kam_u32 _pad;
+    kam_u64 phys;
+    kam_u64 virt;
+    kam_u64 pages;
+    kam_u64 attr;
+} kam_mem_desc_t;
+
+KAM_STATIC_ASSERT(sizeof(kam_mem_desc_t) == 40, mem_desc_size);
+
+/* Memory types we care about (EFI_MEMORY_TYPE). */
+#define KAM_EFI_CONVENTIONAL 7u
+
+typedef kam_status_t (*kam_get_map_fn)(
+    kam_usize *size, kam_mem_desc_t *map, kam_usize *key,
+    kam_usize *desc_size, kam_u32 *desc_ver);
+typedef kam_status_t (*kam_exit_bs_fn)(kam_handle_t image, kam_usize key);
+
+/* BOOT_SERVICES up to ExitBootServices. Field order follows the spec;
+ * GetMemoryMap is at +56, ExitBootServices at +232. */
+struct kam_boot_services {
+    kam_u8 hdr[24];
+    void *raise_tpl;        /* +24 */
+    void *restore_tpl;      /* +32 */
+    void *alloc_pages;      /* +40 */
+    void *free_pages;       /* +48 */
+    kam_get_map_fn get_map; /* +56 */
+    void *alloc_pool;       /* +64 */
+    void *free_pool;        /* +72 */
+    void *create_event;     /* +80 */
+    void *set_timer;        /* +88 */
+    void *wait_event;       /* +96 */
+    void *signal_event;     /* +104 */
+    void *close_event;      /* +112 */
+    void *check_event;      /* +120 */
+    void *install_proto;    /* +128 */
+    void *reinstall_proto;  /* +136 */
+    void *uninstall_proto;  /* +144 */
+    void *handle_proto;     /* +152 */
+    void *reserved;         /* +160 */
+    void *reg_notify;       /* +168 */
+    void *locate_handle;    /* +176 */
+    void *locate_devpath;   /* +184 */
+    void *install_cfg;      /* +192 */
+    void *load_image;       /* +200 */
+    void *start_image;      /* +208 */
+    void *exit;             /* +216 */
+    void *unload_image;     /* +224 */
+    kam_exit_bs_fn exit_bs; /* +232 */
+};
+
+KAM_STATIC_ASSERT(sizeof(kam_boot_services_t) == 240, boot_services_size);
 
 #endif

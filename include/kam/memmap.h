@@ -3,7 +3,11 @@
 
 /* Shared memory-map format. Shaped like a BIOS E820 entry so the BIOS
  * path can store firmware entries verbatim; the UEFI path converts
- * EFI_MEMORY_DESCRIPTORs into the same shape. */
+ * EFI_MEMORY_DESCRIPTORs into the same shape.
+ *
+ * Only type 1 (usable RAM) is portable across paths. Any other value
+ * is the raw firmware type of that path (E820 on BIOS, EFI_MEMORY_TYPE
+ * on UEFI) and must not be compared across paths. */
 
 #include "types.h"
 
