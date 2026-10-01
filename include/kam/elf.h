@@ -77,12 +77,25 @@ static inline kam_u64 kam_elf_prepare(const kam_u8 *img, kam_usize img_size,
     for (i = 0; i < h->phnum; i++) {
         const kam_elf_phdr_t *p =
             (const kam_elf_phdr_t *)(img + h->phoff + i * sizeof(kam_elf_phdr_t));
+        kam_usize k;
         if (p->type != KAM_ELF_PT_LOAD)
             continue;
         if (n >= KAM_ELF_MAXSEG || p->filesz > p->memsz)
             return 0;
         if (p->offset + p->filesz > img_size || p->paddr == 0)
             return 0;
+        if (p->memsz > ~(kam_u64)0 - p->paddr)
+            return 0;
+        /* Segments must not overlap: commit order would silently let a
+         * later segment rewrite an earlier one. */
+        for (k = 0; k < n; k++) {
+            kam_u64 a0 = segs[k].paddr;
+            kam_u64 a1 = a0 + segs[k].memsz;
+            kam_u64 b0 = p->paddr;
+            kam_u64 b1 = b0 + p->memsz;
+            if (b0 < a1 && a0 < b1)
+                return 0;
+        }
         segs[n].paddr = p->paddr;
         segs[n].filesz = p->filesz;
         segs[n].memsz = p->memsz;
@@ -91,6 +104,18 @@ static inline kam_u64 kam_elf_prepare(const kam_u8 *img, kam_usize img_size,
     }
     if (n == 0 || h->entry == 0)
         return 0;
+    /* Entry must land inside the file-backed part of a segment. */
+    {
+        kam_usize k;
+        int ok = 0;
+        for (k = 0; k < n; k++) {
+            if (h->entry >= segs[k].paddr &&
+                h->entry < segs[k].paddr + segs[k].filesz)
+                ok = 1;
+        }
+        if (!ok)
+            return 0;
+    }
     *nseg_out = n;
     return h->entry;
 }

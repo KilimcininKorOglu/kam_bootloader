@@ -66,7 +66,8 @@ static void elf_img(kam_u8 *b, kam_usize n, int good) {
     b[4] = 2;
     b[5] = 1;
     b[16] = 2; /* ET_EXEC */
-    b[24] = 0x40; /* entry */
+    b[24] = 0x08; /* entry 0x100008: inside the LOAD segment */
+    b[26] = 0x10;
     b[32] = 0x40; /* phoff */
     b[54] = 56;   /* phentsize */
     b[56] = 1;    /* phnum */
@@ -93,7 +94,7 @@ static void test_elf(void) {
 
     elf_img(img, sizeof(img), 1);
     e = kam_elf_prepare(img, sizeof(img), segs, &nseg);
-    CHECK(e == 0x40);
+    CHECK(e == 0x100008u);
     CHECK(nseg == 1);
     CHECK(segs[0].paddr == 0x100000u);
     CHECK(segs[0].filesz == 16 && segs[0].memsz == 32);
@@ -121,6 +122,21 @@ static void test_elf(void) {
     CHECK(kam_elf_prepare(img, sizeof(img), segs, &nseg) == 0);
     elf_img(img, sizeof(img), 1);
     CHECK(kam_elf_prepare(img, 64, segs, &nseg) == 0); /* truncated */
+    elf_img(img, sizeof(img), 1);
+    img[24] = 0x40; /* entry outside any segment */
+    img[26] = 0x00;
+    nseg = 0;
+    CHECK(kam_elf_prepare(img, sizeof(img), segs, &nseg) == 0);
+    elf_img(img, sizeof(img), 1);
+    img[56] = 2; /* phnum: second LOAD overlaps the first */
+    img[120] = 1; /* type LOAD */
+    img[128] = 144; /* offset */
+    img[144] = 0x08; /* paddr 0x100008, inside first seg */
+    img[146] = 0x10;
+    img[152] = 16; /* filesz */
+    img[160] = 16; /* memsz */
+    nseg = 0;
+    CHECK(kam_elf_prepare(img, sizeof(img), segs, &nseg) == 0);
 }
 
 static void test_config(void) {
