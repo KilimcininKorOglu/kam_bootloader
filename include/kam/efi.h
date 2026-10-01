@@ -93,6 +93,81 @@ typedef kam_status_t (*kam_get_map_fn)(
     kam_usize *size, kam_mem_desc_t *map, kam_usize *key,
     kam_usize *desc_size, kam_u32 *desc_ver);
 typedef kam_status_t (*kam_exit_bs_fn)(kam_handle_t image, kam_usize key);
+typedef kam_status_t (*kam_alloc_pages_fn)(kam_u32 type, kam_u32 memtype,
+                                            kam_usize pages, kam_u64 *addr);
+typedef kam_status_t (*kam_alloc_pool_fn)(kam_u32 memtype, kam_usize size,
+                                           void **buf);
+typedef kam_status_t (*kam_handle_proto_fn)(kam_handle_t handle,
+                                             const kam_guid_t *guid,
+                                             void **iface);
+
+#define KAM_ALLOC_ADDRESS 2u
+#define KAM_EFI_LOADER_DATA 2u
+
+/* Well-known protocol GUIDs. */
+static const kam_guid_t KAM_GUID_LOADED_IMAGE = {
+    0x5B1B31A1, 0x9562, 0x11D2,
+    {0x8E, 0x3F, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B}};
+static const kam_guid_t KAM_GUID_SIMPLE_FS = {
+    0x964E5B22, 0x6459, 0x11D2,
+    {0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B}};
+static const kam_guid_t KAM_GUID_FILE_INFO = {
+    0x09576E92, 0x6D3F, 0x11D2,
+    {0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B}};
+
+/* EFI_LOADED_IMAGE_PROTOCOL head: DeviceHandle lives at +24. */
+typedef struct kam_loaded_image {
+    kam_u32 rev;
+    kam_u32 _pad;
+    kam_handle_t parent;
+    kam_system_table_t *systab;
+    kam_handle_t dev_handle;
+} kam_loaded_image_t;
+
+KAM_STATIC_ASSERT(sizeof(kam_loaded_image_t) == 32, loaded_image_size);
+
+typedef struct kam_fs_proto kam_fs_proto_t;
+typedef struct kam_file_proto kam_file_proto_t;
+
+typedef kam_status_t (*kam_open_volume_fn)(kam_fs_proto_t *self,
+                                            kam_file_proto_t **root);
+typedef kam_status_t (*kam_file_open_fn)(kam_file_proto_t *self,
+                                          kam_file_proto_t **out,
+                                          const kam_char16 *name,
+                                          kam_u64 mode, kam_u64 attrs);
+typedef kam_status_t (*kam_file_read_fn)(kam_file_proto_t *self,
+                                          kam_usize *size, void *buf);
+typedef kam_status_t (*kam_file_getinfo_fn)(kam_file_proto_t *self,
+                                             const kam_guid_t *type,
+                                             kam_usize *size, void *buf);
+
+struct kam_fs_proto {
+    kam_u64 rev;
+    kam_open_volume_fn open_volume;
+};
+
+/* EFI_FILE_PROTOCOL: only open/read/getinfo are typed, rest reserved. */
+struct kam_file_proto {
+    kam_u64 rev;              /* +0 */
+    kam_file_open_fn open;    /* +8 */
+    void *close;              /* +16 */
+    void *del;                /* +24 */
+    kam_file_read_fn read;    /* +32 */
+    void *write;              /* +40 */
+    void *getpos;             /* +48 */
+    void *setpos;             /* +56 */
+    kam_file_getinfo_fn getinfo; /* +64 */
+    void *setinfo;            /* +72 */
+    void *flush;              /* +80 */
+};
+
+#define KAM_EFI_FILE_MODE_READ 1u
+
+/* EFI_FILE_INFO head: FileSize lives at +8. */
+typedef struct kam_file_info {
+    kam_u64 size;
+    kam_u64 filesize;
+} kam_file_info_t;
 
 /* BOOT_SERVICES up to ExitBootServices. Field order follows the spec;
  * GetMemoryMap is at +56, ExitBootServices at +232. */
@@ -100,10 +175,10 @@ struct kam_boot_services {
     kam_u8 hdr[24];
     void *raise_tpl;        /* +24 */
     void *restore_tpl;      /* +32 */
-    void *alloc_pages;      /* +40 */
+    kam_alloc_pages_fn alloc_pages; /* +40 */
     void *free_pages;       /* +48 */
     kam_get_map_fn get_map; /* +56 */
-    void *alloc_pool;       /* +64 */
+    kam_alloc_pool_fn alloc_pool;   /* +64 */
     void *free_pool;        /* +72 */
     void *create_event;     /* +80 */
     void *set_timer;        /* +88 */
@@ -114,7 +189,7 @@ struct kam_boot_services {
     void *install_proto;    /* +128 */
     void *reinstall_proto;  /* +136 */
     void *uninstall_proto;  /* +144 */
-    void *handle_proto;     /* +152 */
+    kam_handle_proto_fn handle_proto; /* +152 */
     void *reserved;         /* +160 */
     void *reg_notify;       /* +168 */
     void *locate_handle;    /* +176 */

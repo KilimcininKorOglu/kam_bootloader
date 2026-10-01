@@ -14,7 +14,7 @@ import sys
 SECTOR = 512
 PART_START = 2048  # 1MiB alignment, standard for ESPs
 
-def build_fat16(files, total_sectors=131072, startup_nsh=None):  # 64MiB volume
+def build_fat16(files, total_sectors=131072, startup_nsh=None, extras=None):  # 64MiB volume
     reserved = 4
     fats = 2
     sectors_per_fat = 256
@@ -144,6 +144,34 @@ def build_fat16(files, total_sectors=131072, startup_nsh=None):  # 64MiB volume
         struct.pack_into('<I', boot_data, o + 28, sz)
     write_chain(boot_cl, bytes(boot_data))
 
+    # Generic extras: 'NAME.EXT' goes to root, 'DIR/NAME.EXT' one level down.
+    dir_bufs = {}
+    for fatpath, data in (extras or []):
+        parts = fatpath.split('/')
+        start, _ = alloc_chain(len(data))
+        write_chain(start, data)
+        if len(parts) == 1:
+            root_add(dos_name(parts[0]), 0x20, start, len(data))
+        else:
+            if parts[0] not in dir_bufs:
+                cl = make_dir()
+                root_add(dos_name(parts[0]), 0x10, cl, 0)
+                dir_bufs[parts[0]] = [cl, bytearray(sectors_per_cluster * SECTOR)]
+            cl, buf = dir_bufs[parts[0]]
+            for i in range(sectors_per_cluster * SECTOR // 32):
+                o = i * 32
+                if buf[o] in (0x00, 0xE5):
+                    buf[o:o + 11] = dos_name(parts[1])
+                    buf[o + 11] = 0x20
+                    struct.pack_into('<H', buf, o + 20, 0)
+                    struct.pack_into('<H', buf, o + 26, start)
+                    struct.pack_into('<I', buf, o + 28, len(data))
+                    break
+            else:
+                raise RuntimeError('directory is full: ' + parts[0])
+    for cl, buf in dir_bufs.values():
+        write_chain(cl, bytes(buf))
+
     # Optional shell fallback: the UEFI shell auto-runs STARTUP.NSH.
     # Needed for QEMU hard disks (non-removable, no auto Boot#### entry).
     if startup_nsh:
@@ -182,6 +210,8 @@ def main():
     ap.add_argument('--aa64', default=None)
     ap.add_argument('--startup-nsh', action='store_true',
                     help='add STARTUP.NSH fallback launching the default loader')
+    ap.add_argument('--extra', action='append', default=[],
+                    help='extra file as SRC:FATPATH (e.g. k.elf:KAM/KERNEL.ELF)')
     a = ap.parse_args()
     files = []
     if a.x64:
@@ -195,7 +225,12 @@ def main():
         return 1
     first = files[0][0]
     nsh = f'\\EFI\\BOOT\\{first}\r\n' if a.startup_nsh else None
-    img = build_fat16(files, startup_nsh=nsh)
+    extras = []
+    for item in a.extra:
+        src, _, dst = item.partition(':')
+        with open(src, 'rb') as f:
+            extras.append((dst, f.read()))
+    img = build_fat16(files, startup_nsh=nsh, extras=extras)
     os.makedirs(os.path.dirname(a.out) or '.', exist_ok=True)
     with open(a.out, 'wb') as f:
         f.write(img)

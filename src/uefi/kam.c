@@ -1,13 +1,15 @@
 /* KAM UEFI application. x86_64 + AArch64 from a single source.
  * Freestanding C, no libc.
  *
- * Flow: banner -> GetMemoryMap (converted to kam_memmap) ->
- * ExitBootServices (key-retry loop) -> post-exit serial proof -> halt.
- * After ExitBootServices no firmware service (including ConOut) is used. */
+ * Flow: banner -> GetMemoryMap (kam_memmap) -> load KAM/KERNEL.ELF from
+ * the ESP -> AllocatePages for its segments -> ExitBootServices ->
+ * jump to the kernel. After ExitBootServices only direct serial is used. */
 
 #include "kam/efi.h"
 #include "kam/console.h"
 #include "kam/memmap.h"
+#include "kam/elf.h"
+#include "kam/raw_serial.h"
 
 #if defined(__x86_64__)
 #define KAM_ARCH_NAME "x86_64 UEFI"
@@ -18,9 +20,15 @@
 #endif
 
 #define KAM_MAP_BUF_SIZE 8192u
+#define KAM_KERNEL_MAX 131072u /* 128KB static read buffer */
 
 static kam_u8 kam_map_buf[KAM_MAP_BUF_SIZE];
 static kam_memmap_t kam_map;
+static kam_u8 kam_info_buf[128];
+
+static const kam_char16 KAM_KERNEL_PATH[] = {
+    '\\', 'K', 'A', 'M', '\\', 'K', 'E', 'R', 'N', 'E', 'L', '.', 'E', 'L',
+    'F', 0};
 
 static void kam_put_hex(kam_system_table_t *st, kam_u64 v) {
     kam_usize i;
@@ -88,80 +96,66 @@ static kam_status_t kam_fill_map(kam_system_table_t *st, kam_usize *key_out) {
     return KAM_EFI_SUCCESS;
 }
 
-/* Direct serial output that survives ExitBootServices (no firmware used). */
-#if defined(__x86_64__)
-static kam_u8 kam_inb(kam_u16 port) {
-    kam_u8 v;
-    __asm__ volatile("inb %1, %0" : "=a"(v) : "Nd"(port));
-    return v;
+/* Read the whole kernel file into an AllocatePool buffer. */
+static kam_status_t kam_read_kernel(kam_handle_t image,
+                                    kam_boot_services_t *bs,
+                                    kam_u8 **img_out, kam_usize *size_out) {
+    kam_loaded_image_t *li = 0;
+    kam_fs_proto_t *fs = 0;
+    kam_file_proto_t *root = 0, *f = 0;
+    kam_file_info_t *info = (kam_file_info_t *)kam_info_buf;
+    kam_usize info_size = sizeof(kam_info_buf);
+    kam_usize size;
+    kam_u8 *buf = 0;
+    kam_status_t s;
+
+    s = bs->handle_proto(image, &KAM_GUID_LOADED_IMAGE, (void **)&li);
+    if (KAM_EFI_ERROR(s) || !li)
+        return KAM_EFI_NOT_FOUND;
+    s = bs->handle_proto(li->dev_handle, &KAM_GUID_SIMPLE_FS, (void **)&fs);
+    if (KAM_EFI_ERROR(s) || !fs || !fs->open_volume)
+        return KAM_EFI_NOT_FOUND;
+    s = fs->open_volume(fs, &root);
+    if (KAM_EFI_ERROR(s) || !root)
+        return KAM_EFI_NOT_FOUND;
+    s = root->open(root, &f, KAM_KERNEL_PATH, KAM_EFI_FILE_MODE_READ, 0);
+    if (KAM_EFI_ERROR(s) || !f)
+        return KAM_EFI_NOT_FOUND;
+    s = f->getinfo(f, &KAM_GUID_FILE_INFO, &info_size, info);
+    if (KAM_EFI_ERROR(s) || info->filesize == 0 ||
+        info->filesize > KAM_KERNEL_MAX)
+        return KAM_EFI_DEVICE_ERROR;
+    size = (kam_usize)info->filesize;
+    s = bs->alloc_pool(KAM_EFI_LOADER_DATA, size, (void **)&buf);
+    if (KAM_EFI_ERROR(s) || !buf)
+        return KAM_EFI_DEVICE_ERROR;
+    s = f->read(f, &size, buf);
+    if (KAM_EFI_ERROR(s) || size != (kam_usize)info->filesize)
+        return KAM_EFI_DEVICE_ERROR;
+    *img_out = buf;
+    *size_out = size;
+    return KAM_EFI_SUCCESS;
 }
 
-static void kam_outb(kam_u16 port, kam_u8 v) {
-    __asm__ volatile("outb %0, %1" : : "a"(v), "Nd"(port));
-}
-
-static void kam_raw_serial_init(void) {
-    kam_outb(0x3FB, 0x80);
-    kam_outb(0x3F8, 0x01);
-    kam_outb(0x3F9, 0x00);
-    kam_outb(0x3FB, 0x03);
-}
-
-static void kam_raw_putc_x86(char c) {
-    while ((kam_inb(0x3FD) & 0x20) == 0) {
-    }
-    kam_outb(0x3F8, (kam_u8)c);
-}
-#elif defined(__aarch64__)
-/* PL011 UART on QEMU virt (platform-specific; virt-only for now). */
-#define KAM_PL011_BASE ((volatile kam_u32 *)0x09000000u)
-
-static void kam_raw_putc_aa64(char c) {
-    while ((KAM_PL011_BASE[0x18 / 4] & (1u << 5)) != 0) {
-    }
-    KAM_PL011_BASE[0] = (kam_u32)c;
-}
-#endif
-
-static void kam_raw_puts(const char *s) {
-    while (*s) {
-#if defined(__x86_64__)
-        if (*s == '\n')
-            kam_raw_putc_x86('\r');
-        kam_raw_putc_x86(*s++);
-#elif defined(__aarch64__)
-        if (*s == '\n')
-            kam_raw_putc_aa64('\r');
-        kam_raw_putc_aa64(*s++);
-#else
-        s++;
-#endif
-    }
-}
-
-static void kam_halt(void) {
-#if defined(__x86_64__)
-    for (;;)
-        __asm__ volatile("hlt");
-#elif defined(__aarch64__)
-    for (;;)
-        __asm__ volatile("wfi");
-#else
-    for (;;) {
-    }
-#endif
-}
+typedef void (*kam_kernel_fn)(const kam_memmap_t *map);
 
 /* UEFI entry point: the linker script makes this symbol the entry. */
 kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
+    kam_boot_services_t *bs;
     kam_usize key = 0;
     kam_status_t s;
     kam_u32 i;
     kam_u64 free_bytes = 0;
+    kam_u8 *kimg = 0;
+    kam_usize ksize = 0;
+    kam_seg_t segs[KAM_ELF_MAXSEG];
+    kam_usize nseg = 0;
+    kam_u64 entry;
     int tries;
 
     if (!st || !st->con_out || !st->boot)
         return KAM_EFI_UNSUPPORTED;
+    bs = st->boot;
 
     /* No screen clear: ClearScreen is optional on some firmware. */
     kam_puts(st, "KAM " KAM_ARCH_NAME "\n");
@@ -186,9 +180,47 @@ kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
     kam_put_u64(st, free_bytes);
     kam_puts(st, " bytes\n");
 
+    /* Load + validate the kernel before leaving boot services. */
+    s = kam_read_kernel(image, bs, &kimg, &ksize);
+    if (KAM_EFI_ERROR(s)) {
+        kam_puts(st, "KAM: kernel file missing\n");
+        return s;
+    }
+    kam_puts(st, "KAM: kernel file bytes: ");
+    kam_put_u64(st, ksize);
+    kam_puts(st, "\n");
+    entry = kam_elf_prepare(kimg, ksize, segs, &nseg);
+    if (entry == 0) {
+        kam_puts(st, "KAM: bad kernel ELF\n");
+        return KAM_EFI_UNSUPPORTED;
+    }
+    /* Allocate the whole span once: segments may share pages. */
+    {
+        kam_u64 lo = ~(kam_u64)0, hi = 0;
+        kam_u64 pages, addr;
+        for (i = 0; i < nseg; i++) {
+            kam_u64 s = segs[i].paddr & ~(kam_u64)4095u;
+            kam_u64 e =
+                (segs[i].paddr + segs[i].memsz + 4095u) & ~(kam_u64)4095u;
+            if (s < lo)
+                lo = s;
+            if (e > hi)
+                hi = e;
+        }
+        pages = (hi - lo) / 4096u;
+        addr = lo;
+        s = bs->alloc_pages(KAM_ALLOC_ADDRESS, KAM_EFI_LOADER_DATA, pages,
+                            &addr);
+        if (KAM_EFI_ERROR(s) || addr != lo) {
+            kam_puts(st, "KAM: segment alloc failed\n");
+            return KAM_EFI_DEVICE_ERROR;
+        }
+    }
+    kam_elf_commit(kimg, segs, nseg);
+
     /* ExitBootServices with map-key retry (the map may change under us). */
     for (tries = 0; tries < 3; tries++) {
-        s = st->boot->exit_bs(image, key);
+        s = bs->exit_bs(image, key);
         if (!KAM_EFI_ERROR(s))
             break;
         s = kam_fill_map(st, &key);
@@ -201,10 +233,10 @@ kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
     }
 
     /* Firmware console is dead from here on. Direct serial only. */
-#if defined(__x86_64__)
     kam_raw_serial_init();
-#endif
-    kam_raw_puts("KAM: boot services exited, halting.\n");
-    kam_halt();
+    kam_raw_puts("KAM: jumping to kernel.\n");
+    ((kam_kernel_fn)entry)(&kam_map);
+    kam_raw_puts("KAM: kernel returned, halting.\n");
+    kam_raw_halt();
     return KAM_EFI_SUCCESS;
 }
