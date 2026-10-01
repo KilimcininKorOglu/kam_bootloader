@@ -231,6 +231,7 @@ def main():
         with open(src, 'rb') as f:
             extras.append((dst, f.read()))
     img = build_fat16(files, startup_nsh=nsh, extras=extras)
+    assert len(img) == (PART_START + 131072) * SECTOR, len(img)
     os.makedirs(os.path.dirname(a.out) or '.', exist_ok=True)
     with open(a.out, 'wb') as f:
         f.write(img)
