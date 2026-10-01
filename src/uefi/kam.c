@@ -11,6 +11,8 @@
 #include "kam/elf.h"
 #include "kam/raw_serial.h"
 #include "kam/scan.h"
+#include "kam/iso.h"
+#include "kam/config.h"
 
 #if defined(__x86_64__)
 #define KAM_ARCH_NAME "x86_64 UEFI"
@@ -27,6 +29,27 @@ static kam_u8 kam_map_buf[KAM_MAP_BUF_SIZE];
 static kam_memmap_t kam_map;
 static kam_u8 kam_info_buf[128];
 static kam_entry_t kam_entries[KAM_SCAN_MAX];
+static kam_entry_t kam_scanout[KAM_SCAN_MAX];
+
+static const kam_char16 KAM_INI_PATH[] = {
+    '\\', 'K', 'A', 'M', '\\', 'K', 'A', 'M', '.', 'I', 'N', 'I', 0};
+
+static int kam_path_eq(const kam_char16 *a, const kam_char16 *b) {
+    kam_usize i = 0;
+    for (;;) {
+        kam_u8 ca = (kam_u8)(a[i] > 127 ? 0 : a[i]);
+        kam_u8 cb = (kam_u8)(b[i] > 127 ? 0 : b[i]);
+        if (ca >= 'a' && ca <= 'z')
+            ca -= 32u;
+        if (cb >= 'a' && cb <= 'z')
+            cb -= 32u;
+        if (ca != cb)
+            return 0;
+        if (ca == 0)
+            return 1;
+        i++;
+    }
+}
 
 static kam_usize kam_strlen16(const kam_char16 *s) {
     kam_usize n = 0;
@@ -73,27 +96,42 @@ static void kam_put_u64(kam_system_table_t *st, kam_u64 v) {
     }
 }
 
-/* Menu over scanned entries. Returns the chosen index (timeout: 0). */
-static kam_usize kam_menu(kam_system_table_t *st, kam_usize count) {
+/* Menu over entries. Timeout boots def_idx. Returns chosen index. */
+static kam_usize kam_menu(kam_system_table_t *st, kam_usize count,
+                          kam_usize timeout, kam_usize def) {
     kam_text_in_t *cin = st->con_in;
     kam_key_t key;
     kam_status_t s;
     kam_usize i;
-    int t;
+    int t, polls;
 
     for (i = 0; i < count; i++) {
         kam_put_u64(st, (kam_u64)(i + 1));
         kam_puts(st, ") ");
-        kam_put_path(st, kam_entries[i].path);
+        kam_puts(st, kam_entries[i].label);
         kam_puts(st, kam_entries[i].kind == KAM_ENTRY_ELF ? " [elf]\n"
-                                                          : " [efi]\n");
+                 : kam_entries[i].kind == KAM_ENTRY_EFI  ? " [efi]\n"
+                                                        : " [iso]\n");
     }
+    if (def >= count)
+        def = 0;
+    if (timeout == 0) {
+        kam_puts(st, "Booting default now.\n");
+        return def;
+    }
+    if (timeout > 60)
+        timeout = 60;
     if (!cin || !cin->read_key || !st->boot->stall) {
         kam_puts(st, "No input services, booting default.\n");
-        return 0;
+        return def;
     }
-    kam_puts(st, "Booting 1 in 5s, press 1-9.\n");
-    for (t = 0; t < 50; t++) {
+    kam_puts(st, "Booting ");
+    kam_put_u64(st, (kam_u64)(def + 1));
+    kam_puts(st, " in ");
+    kam_put_u64(st, (kam_u64)timeout);
+    kam_puts(st, "s, press 1-9.\n");
+    polls = (int)(timeout * 10);
+    for (t = 0; t < polls; t++) {
         s = cin->read_key(cin, &key);
         if (s == KAM_EFI_SUCCESS && key.unicode >= (kam_char16)'1' &&
             key.unicode <= (kam_char16)'9') {
@@ -103,7 +141,7 @@ static kam_usize kam_menu(kam_system_table_t *st, kam_usize count) {
         }
         st->boot->stall(100000);
     }
-    return 0;
+    return def;
 }
 
 /* Fill kam_map from GetMemoryMap. Returns the map key for ExitBootServices. */
@@ -175,6 +213,42 @@ static kam_status_t kam_read_file(kam_boot_services_t *bs,
 }
 
 typedef void (*kam_kernel_fn)(const kam_memmap_t *map);
+
+static kam_system_table_t *kam_st;
+
+static void kam_thunk_puts(const char *s) {
+    kam_puts(kam_st, s);
+}
+
+static void kam_thunk_putc(char c) {
+    char tmp[2] = {c, 0};
+    kam_puts(kam_st, tmp);
+}
+
+static void kam_thunk_putu(kam_u64 v) {
+    kam_put_u64(kam_st, v);
+}
+
+/* ISO probe: read the file, verify volume + catalog, report. */
+static kam_status_t kam_boot_iso(kam_boot_services_t *bs,
+                                 kam_file_proto_t *root,
+                                 const kam_char16 *path) {
+    kam_u8 *img = 0;
+    kam_usize size = 0;
+    kam_status_t s;
+
+    s = kam_read_file(bs, root, path, &img, &size);
+    if (KAM_EFI_ERROR(s)) {
+        kam_puts(kam_st, "KAM: iso file missing\n");
+        return s;
+    }
+    if (kam_iso_boot_report(img, size, kam_thunk_puts, kam_thunk_putc,
+                            kam_thunk_putu)) {
+        kam_puts(kam_st, "KAM: bad ISO image\n");
+        return KAM_EFI_UNSUPPORTED;
+    }
+    return KAM_EFI_SUCCESS;
+}
 
 /* ELF direct-boot: map, load, ExitBootServices, jump. Never returns. */
 static kam_status_t kam_boot_elf(kam_handle_t image, kam_system_table_t *st,
@@ -334,29 +408,78 @@ static kam_status_t kam_chainload(kam_system_table_t *st,
 kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
     kam_boot_services_t *bs;
     kam_file_proto_t *root = 0;
-    kam_usize count;
+    kam_usize count = 0;
+    kam_usize timeout = 5;
+    kam_usize def = 0;
     kam_usize sel;
+    kam_usize nscan, i;
     kam_status_t s;
 
     if (!st || !st->con_out || !st->boot)
         return KAM_EFI_UNSUPPORTED;
     bs = st->boot;
+    kam_st = st;
 
     /* No screen clear: ClearScreen is optional on some firmware. */
     kam_puts(st, "KAM " KAM_ARCH_NAME "\n");
 
-    count = kam_scan(bs, image, kam_entries, KAM_SCAN_MAX);
-    if (count == 0) {
-        kam_puts(st, "KAM: nothing bootable found\n");
-        return KAM_EFI_NOT_FOUND;
-    }
-    sel = kam_menu(st, count);
     if (KAM_EFI_ERROR(kam_fs_open_root(bs, image, &root)) || !root) {
         kam_puts(st, "KAM: no volume\n");
         return KAM_EFI_NOT_FOUND;
     }
+
+    /* Static config first: KAM/KAM.INI. Missing file = dynamic only. */
+    {
+        kam_u8 *cfg = 0;
+        kam_usize cfg_size = 0;
+        if (!KAM_EFI_ERROR(kam_read_file(bs, root, KAM_INI_PATH, &cfg,
+                                         &cfg_size)) &&
+            cfg_size <= 8192) {
+            count = kam_config_parse(cfg, cfg_size, kam_entries,
+                                     KAM_SCAN_MAX, &timeout, &def);
+            kam_puts(st, "KAM: config entries: ");
+            kam_put_u64(st, (kam_u64)count);
+            kam_puts(st, "\n");
+        }
+    }
+
+    /* Append scanned files not already listed. */
+    nscan = kam_scan(bs, image, kam_scanout, KAM_SCAN_MAX);
+    for (i = 0; i < nscan && count < KAM_SCAN_MAX; i++) {
+        kam_usize j;
+        int dup = 0;
+        for (j = 0; j < count; j++) {
+            if (kam_path_eq(kam_scanout[i].path, kam_entries[j].path)) {
+                dup = 1;
+                break;
+            }
+        }
+        if (!dup) {
+            /* Field copy: no memcpy in freestanding. */
+            kam_usize f;
+            kam_entries[count].kind = kam_scanout[i].kind;
+            for (f = 0; f < KAM_PATH_CHARS; f++)
+                kam_entries[count].path[f] = kam_scanout[i].path[f];
+            for (f = 0; f < KAM_LABEL_CHARS; f++)
+                kam_entries[count].label[f] = kam_scanout[i].label[f];
+            count++;
+        }
+    }
+    if (count == 0) {
+        kam_puts(st, "KAM: nothing bootable found\n");
+        return KAM_EFI_NOT_FOUND;
+    }
+    sel = kam_menu(st, count, timeout, def);
     if (kam_entries[sel].kind == KAM_ENTRY_ELF)
         return kam_boot_elf(image, st, root, kam_entries[sel].path);
+    if (kam_entries[sel].kind == KAM_ENTRY_ISO) {
+        kam_puts(st, "KAM: probing ");
+        kam_put_path(st, kam_entries[sel].path);
+        kam_puts(st, "\n");
+        s = kam_boot_iso(bs, root, kam_entries[sel].path);
+        kam_puts(st, "KAM: iso probe returned\n");
+        return s;
+    }
     kam_puts(st, "KAM: chainloading ");
     kam_put_path(st, kam_entries[sel].path);
     kam_puts(st, "\n");

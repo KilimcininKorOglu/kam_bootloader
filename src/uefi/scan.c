@@ -79,7 +79,7 @@ static int kam_join(kam_char16 *dst, const kam_char16 *prefix,
 }
 
 static kam_status_t kam_walk(kam_file_proto_t *dir, const kam_char16 *prefix,
-                             int depth, int kernel_only, kam_entry_t *out,
+                             int depth, int pass, kam_entry_t *out,
                              kam_usize max, kam_usize *count) {
     kam_usize size;
     kam_status_t s;
@@ -112,20 +112,44 @@ static kam_status_t kam_walk(kam_file_proto_t *dir, const kam_char16 *prefix,
                             s = dir->open(dir, &sub, name,
                                           KAM_EFI_FILE_MODE_READ, 0);
                             if (!KAM_EFI_ERROR(s) && sub)
-                                kam_walk(sub, subpath, depth + 1,
-                                         kernel_only, out, max, count);
+                                kam_walk(sub, subpath, depth + 1, pass,
+                                         out, max, count);
                         }
                     } else {
                         int is_kernel = kam_tail_eq(name, "KERNEL.ELF");
                         int is_efi = kam_tail_eq(name, ".EFI");
+                        int is_iso = kam_tail_eq(name, ".ISO");
                         int is_self = kam_tail_eq(name, "BOOTX64.EFI") ||
                                       kam_tail_eq(name, "BOOTAA64.EFI");
-                        if (*count < max &&
-                            (kernel_only ? is_kernel
-                                         : (!is_kernel && is_efi && !is_self)) &&
+                        int want = (pass == 0) ? is_kernel
+                                 : (pass == 1) ? (!is_kernel && is_efi && !is_self)
+                                               : (is_iso && !is_kernel && !is_efi);
+                        if (*count < max && want &&
                             !kam_join(out[*count].path, prefix, name)) {
+                            kam_usize s, e;
                             out[*count].kind = is_kernel ? KAM_ENTRY_ELF
-                                                         : KAM_ENTRY_EFI;
+                                             : is_efi   ? KAM_ENTRY_EFI
+                                                        : KAM_ENTRY_ISO;
+                            /* Label = basename, ASCII. */
+                            s = 0;
+                            e = 0;
+                            while (out[*count].path[e]) {
+                                if (out[*count].path[e] == (kam_char16)'\\' ||
+                                    out[*count].path[e] == (kam_char16)'/')
+                                    s = e + 1;
+                                e++;
+                            }
+                            {
+                                kam_usize li = 0;
+                                while (s + li < e &&
+                                       li + 1 < KAM_LABEL_CHARS) {
+                                    kam_char16 c = out[*count].path[s + li];
+                                    out[*count].label[li] =
+                                        (char)(c < 128 ? c : '?');
+                                    li++;
+                                }
+                                out[*count].label[li] = 0;
+                            }
                             (*count)++;
                         }
                     }
@@ -147,10 +171,10 @@ kam_usize kam_scan(kam_boot_services_t *bs, kam_handle_t image,
         return 0;
     if (KAM_EFI_ERROR(kam_fs_open_root(bs, image, &root)) || !root)
         return 0;
-    for (pass = 0; pass < 2 && count < max; pass++) {
+    for (pass = 0; pass < 3 && count < max; pass++) {
         if (pass > 0 && root->setpos)
             root->setpos(root, 0);
-        kam_walk(root, empty, 0, pass == 0, out, max, &count);
+        kam_walk(root, empty, 0, pass, out, max, &count);
     }
     return count;
 }

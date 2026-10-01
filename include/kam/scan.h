@@ -10,15 +10,18 @@
 #define KAM_SCAN_MAX 16u
 #define KAM_SCAN_DEPTH 3
 #define KAM_PATH_CHARS 96u
+#define KAM_LABEL_CHARS 64u
 
 typedef enum kam_entry_kind {
     KAM_ENTRY_ELF,
-    KAM_ENTRY_EFI
+    KAM_ENTRY_EFI,
+    KAM_ENTRY_ISO
 } kam_entry_kind_t;
 
 typedef struct kam_entry {
     kam_entry_kind_t kind;
     kam_char16 path[KAM_PATH_CHARS];
+    char label[KAM_LABEL_CHARS];
 } kam_entry_t;
 
 /* Open the volume our image was loaded from. */
