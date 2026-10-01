@@ -14,11 +14,22 @@ BCFLAGS  := -ffreestanding -nostdlib -fno-stack-protector \
             -fno-unwind-tables -fno-asynchronous-unwind-tables \
             -mno-red-zone -Wall -Wextra -O2 -Iinclude -c
 BIOS_HEADERS := include/kam/types.h include/kam/memmap.h \
-                include/kam/bios_addrs.h include/kam/bios_console.h
+                include/kam/bios_addrs.h include/kam/bios_console.h \
+                include/kam/elf.h
+KAM_HEADERS := include/kam/efi.h include/kam/types.h include/kam/console.h \
+               include/kam/memmap.h include/kam/elf.h include/kam/raw_serial.h
+KERN_HEADERS := include/kam/types.h include/kam/memmap.h \
+                include/kam/elf.h include/kam/raw_serial.h
 
-.PHONY: all bios bios-img check-uefi uefi-x64 uefi-aa64 esp run-x64 run-aa64 run-bios test-x64 test-aa64 test-bios clean
+CC_X64_LNX  := $(LLVM)/clang --target=x86_64-unknown-linux-gnu
+CC_AA64_LNX := $(LLVM)/clang --target=aarch64-unknown-linux-gnu
+KCFLAGS  := -ffreestanding -nostdlib -fno-stack-protector \
+            -fno-unwind-tables -fno-asynchronous-unwind-tables \
+            -mno-red-zone -Wall -Wextra -O2 -Iinclude -c
 
-all: bios-img check-uefi uefi-x64 uefi-aa64
+.PHONY: all bios bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64 esp run-x64 run-aa64 run-bios test-x64 test-aa64 test-bios clean
+
+all: bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64
 
 bios: $(BUILD)/mbr.bin
 	@echo "MBR: $< ($$(wc -c < $<) bytes)"
@@ -63,8 +74,9 @@ $(BUILD)/BOOTAA64.EFI: $(BUILD)/kam_aa64.o linker/uefi_aa64.ld
 	$(LD_LLD) -flavor link -subsystem:efi_application -entry:efi_main \
 	  -out:$@ $(BUILD)/kam_aa64.o
 
-esp: uefi-x64
-	python3 tools/mkesp.py --out $(BUILD)/esp.img --x64 $(BUILD)/BOOTX64.EFI --startup-nsh
+esp: uefi-x64 kernel-x64
+	python3 tools/mkesp.py --out $(BUILD)/esp.img --x64 $(BUILD)/BOOTX64.EFI --startup-nsh \
+	  --extra $(BUILD)/kernel-x64.elf:KAM/KERNEL.ELF
 
 run-bios: bios-img
 	qemu-system-x86_64 -drive format=raw,file=$(BUILD)/bios.img -nographic -net none
@@ -79,15 +91,34 @@ run-aa64: uefi-aa64
 	  -drive format=raw,file=$(BUILD)/esp_aa64.img -nographic -net none -device ramfb
 
 test-x64: esp
-	sh tools/boot_test.sh $(BUILD)/test_x64.log '\EFI\BOOT\BOOTX64.EFI' 45 'boot services exited' -- \
+	sh tools/boot_test.sh $(BUILD)/test_x64.log '\EFI\BOOT\BOOTX64.EFI' 45 'KAM-KERNEL' -- \
 	  qemu-system-x86_64 -drive if=pflash,format=raw,readonly=on,file=$(QEMU_X64_FW) \
 	  -drive format=raw,file=$(BUILD)/esp.img -nographic -net none
 
-test-aa64: uefi-aa64
-	python3 tools/mkesp.py --out $(BUILD)/esp_aa64.img --aa64 $(BUILD)/BOOTAA64.EFI --startup-nsh
-	sh tools/boot_test.sh $(BUILD)/test_aa64.log '\EFI\BOOT\BOOTAA64.EFI' 60 'boot services exited' -- \
+test-aa64: uefi-aa64 kernel-aa64
+	python3 tools/mkesp.py --out $(BUILD)/esp_aa64.img --aa64 $(BUILD)/BOOTAA64.EFI --startup-nsh \
+	  --extra $(BUILD)/kernel-aa64.elf:KAM/KERNEL.ELF
+	sh tools/boot_test.sh $(BUILD)/test_aa64.log '\EFI\BOOT\BOOTAA64.EFI' 60 'KAM-KERNEL' -- \
 	  qemu-system-aarch64 -M virt -cpu cortex-a72 -bios $(QEMU_AA64_FW) \
 	  -drive format=raw,file=$(BUILD)/esp_aa64.img -nographic -net none -device ramfb
+
+# --- Test kernel (ELF64, linked at 1MB, loaded by both paths)
+$(BUILD)/kam_kernel_x64.o: src/kernel/kam_kernel.c $(KERN_HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC_X64_LNX) $(KCFLAGS) src/kernel/kam_kernel.c -o $@
+
+$(BUILD)/kam_kernel_aa64.o: src/kernel/kam_kernel.c $(KERN_HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC_AA64_LNX) $(KCFLAGS) src/kernel/kam_kernel.c -o $@
+
+kernel-x64: $(BUILD)/kernel-x64.elf
+kernel-aa64: $(BUILD)/kernel-aa64.elf
+
+$(BUILD)/kernel-x64.elf: $(BUILD)/kam_kernel_x64.o linker/kernel_x64.ld
+	$(LD_LLD) -T linker/kernel_x64.ld -o $@ $(BUILD)/kam_kernel_x64.o
+
+$(BUILD)/kernel-aa64.elf: $(BUILD)/kam_kernel_aa64.o linker/kernel_aa64.ld
+	$(LD_LLD) -T linker/kernel_aa64.ld -o $@ $(BUILD)/kam_kernel_aa64.o
 
 # --- BIOS stage2 chain: trampoline (nasm, fixed 2KB) + C payload (fixed 0x8800)
 $(BUILD)/kam_bios.o: src/bios/stage2_main.c $(BIOS_HEADERS)
@@ -109,20 +140,21 @@ $(BUILD)/stage2_tramp.bin: src/bios/stage2.asm
 $(BUILD)/stage2.bin: $(BUILD)/stage2_tramp.bin $(BUILD)/payload.bin
 	cat $(BUILD)/stage2_tramp.bin $(BUILD)/payload.bin > $@
 
-bios-img: bios $(BUILD)/stage2.bin
+bios-img: bios $(BUILD)/stage2.bin $(BUILD)/kernel-x64.elf
 	@mkdir -p $(BUILD)
+	@sz=$$(wc -c < $(BUILD)/kernel-x64.elf); test "$$sz" -le 65536 || (echo "kernel too big: $$sz"; exit 1)
 	cp $(BUILD)/mbr.bin $(BUILD)/bios.img
 	dd if=$(BUILD)/stage2.bin of=$(BUILD)/bios.img bs=512 seek=1 conv=notrunc status=none
-	truncate -s 16384 $(BUILD)/bios.img
+	dd if=$(BUILD)/kernel-x64.elf of=$(BUILD)/bios.img bs=512 seek=17 conv=notrunc status=none
+	truncate -s 81920 $(BUILD)/bios.img
 	@echo "BIOS image: $(BUILD)/bios.img ($$(wc -c < $(BUILD)/bios.img) bytes)"
 
 test-bios: bios-img
 	timeout 20 qemu-system-x86_64 -drive format=raw,file=$(BUILD)/bios.img \
 	  -nographic -net none > $(BUILD)/test_bios.log 2>&1; \
-	grep -a -q "KAM BIOS stage2" $(BUILD)/test_bios.log && \
-	grep -a -q "Free RAM" $(BUILD)/test_bios.log && \
-	echo "PASS: BIOS stage2 booted in QEMU" || \
-	(echo "FAIL: no BIOS stage2 output"; tr -d '\0' < $(BUILD)/test_bios.log | tail -n 12; exit 1)
+	grep -a -q "KAM-KERNEL" $(BUILD)/test_bios.log && \
+	echo "PASS: BIOS path reached the kernel" || \
+	(echo "FAIL: no KAM-KERNEL output"; tr -d '\0' < $(BUILD)/test_bios.log | tail -n 12; exit 1)
 
 clean:
 	rm -rf $(BUILD)
