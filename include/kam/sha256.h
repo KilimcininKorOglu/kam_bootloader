@@ -1,7 +1,7 @@
 #ifndef KAM_SHA256_H
 #define KAM_SHA256_H
 
-/* Freestanding SHA-256 (FIPS 180-4).
+/* Freestanding SHA-256 (FIPS 180-4). */
  * kam_sha256_once is all most callers need. */
 
 #include "types.h"
