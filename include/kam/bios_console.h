@@ -93,4 +93,15 @@ static inline void kam_put_u64(kam_u64 v) {
         kam_putc(buf[--i]);
 }
 
+static inline void kam_put_hex(kam_u64 v) {
+    kam_usize i;
+    kam_putc('0');
+    kam_putc('x');
+    for (i = 0; i < 16; i++) {
+        kam_u8 n = (kam_u8)((v >> 60) & 0xF);
+        kam_putc((char)(n < 10 ? '0' + n : 'a' + (n - 10)));
+        v <<= 4;
+    }
+}
+
 #endif

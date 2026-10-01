@@ -194,10 +194,16 @@ pm32:
 
     ; PAE + load PML4.
     mov eax, cr4
-    or eax, 1 << 5
+    or eax, (1 << 5) | (1 << 9) | (1 << 10)  ; PAE + OSFXSR + OSXMMEXCPT
     mov cr4, eax
     mov eax, PML4_BASE
     mov cr3, eax
+
+    ; Floating point: clear EM, set MP (clang may emit SSE).
+    mov eax, cr0
+    and eax, ~(1 << 2)
+    or eax, 1 << 1
+    mov cr0, eax
 
     ; EFER.LME.
     mov ecx, 0xC0000080

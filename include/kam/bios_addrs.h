@@ -12,5 +12,9 @@
 #define KAM_E820_BASE     0x5000u  /* kam_memmap_t filled by stage2.asm */
 #define KAM_PML4_BASE     0x10000u /* 3 pages: PML4 + PDPT + PD (2MB pages) */
 #define KAM_STACK64       0x90000u /* 64-bit stack top (grows down) */
+#define KAM_KFILE_BASE    0x20000u /* MBR stages KERNEL.ELF file bytes here */
+#define KAM_KFILE_MAX     0x10000u /* 64KB kernel file budget */
+#define KAM_KLBA          17u      /* kernel file starts at this LBA */
+#define KAM_KSECT         128u     /* kernel file reservation in sectors */
 
 #endif
