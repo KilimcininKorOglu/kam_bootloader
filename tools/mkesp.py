@@ -100,17 +100,67 @@ def build_fat16(files, total_sectors=131072, startup_nsh=None, extras=None):  # 
             base, ext = name, ''
         return (base[:8].ljust(8) + ext[:3].ljust(3)).encode('ascii')
 
-    def root_add(dosname, attr, cluster, size):
-        for i in range(root_entries):
-            o = i * 32
-            if root[o] in (0x00, 0xE5):
-                root[o:o + 11] = dosname
-                root[o + 11] = attr
-                struct.pack_into('<H', root, o + 20, 0)        # cluster high (FAT16: 0)
-                struct.pack_into('<H', root, o + 26, cluster)  # cluster low
-                struct.pack_into('<I', root, o + 28, size)     # file size
+    def needs_lfn(name):
+        up = name.upper()
+        if '.' in up:
+            base, ext = up.rsplit('.', 1)
+        else:
+            base, ext = up, ''
+        return len(base) > 8 or len(ext) > 3
+
+    def lfn_checksum(dos11):
+        s = 0
+        for b in dos11:
+            s = ((s >> 1) + ((s & 1) << 7) + b) & 0xFF
+        return s
+
+    def short_record(dos11, attr, cluster, size):
+        rec = bytearray(32)
+        rec[0:11] = dos11
+        rec[11] = attr
+        struct.pack_into('<H', rec, 20, 0)
+        struct.pack_into('<H', rec, 26, cluster)
+        struct.pack_into('<I', rec, 28, size)
+        return bytes(rec)
+
+    def entry_records(name, attr, cluster, size):
+        """8.3 record, preceded by LFN records when the name needs them."""
+        dos11 = dos_name(name)
+        recs = []
+        if needs_lfn(name):
+            units = [ord(c) for c in name]
+            n = (len(units) + 12) // 13
+            padded = units + [0x0000] + [0xFFFF] * (n * 13 - len(units) - 1)
+            for e in range(n):
+                seq = n - e
+                if e == 0:
+                    seq |= 0x40
+                chunk13 = padded[e * 13:(e + 1) * 13]
+                rec = bytearray(32)
+                rec[0] = seq
+                rec[11] = 0x0F
+                rec[13] = lfn_checksum(dos11)
+                rec[1:11] = struct.pack('<5H', *chunk13[0:5])
+                rec[14:26] = struct.pack('<6H', *chunk13[5:11])
+                rec[28:32] = struct.pack('<2H', *chunk13[11:13])
+                recs.append(bytes(rec))
+        recs.append(short_record(dos11, attr, cluster, size))
+        return recs
+
+    def put_records(buf, max_slots, name, attr, cluster, size):
+        """Write an 8.3 record plus LFN records when needed, contiguously."""
+        recs = entry_records(name, attr, cluster, size)
+        n = len(recs)
+        for i in range(max_slots - n + 1):
+            if all(buf[(i + k) * 32] in (0x00, 0xE5) for k in range(n)):
+                for k, rec in enumerate(recs):
+                    o = (i + k) * 32
+                    buf[o:o + 32] = rec
                 return
-        raise RuntimeError('root directory is full')
+        raise RuntimeError('directory is full: ' + name)
+
+    def root_add(name, attr, cluster, size):
+        put_records(root, root_entries, name, attr, cluster, size)
 
     # Directories: EFI, EFI/BOOT.
     def make_dir():
@@ -121,7 +171,7 @@ def build_fat16(files, total_sectors=131072, startup_nsh=None, extras=None):  # 
 
     efi_cl = make_dir()
     boot_cl = make_dir()
-    root_add(dos_name('EFI'), 0x10, efi_cl, 0)
+    root_add('EFI', 0x10, efi_cl, 0)
     # BOOT entry inside EFI.
     efi_data = bytearray(sectors_per_cluster * SECTOR)
     efi_data[0:11] = dos_name('BOOT')
@@ -144,31 +194,62 @@ def build_fat16(files, total_sectors=131072, startup_nsh=None, extras=None):  # 
         struct.pack_into('<I', boot_data, o + 28, sz)
     write_chain(boot_cl, bytes(boot_data))
 
-    # Generic extras: 'NAME.EXT' goes to root, 'DIR/NAME.EXT' one level down.
-    dir_bufs = {}
+    # Generic extras: 'NAME.EXT' goes to root, 'A/B/NAME.EXT' nested.
+    # The EFI dir already exists (BOOT setup above); reuse it instead of
+    # shadowing it with a duplicate entry.
+    dir_bufs = {'EFI': [efi_cl, efi_data]}
+
+    def find_in_buf(buf, ent):
+        for i in range(len(buf) // 32):
+            o = i * 32
+            if buf[o] == 0x00:
+                break
+            if buf[o] == 0xE5:
+                continue
+            if bytes(buf[o:o + 11]) == ent and (buf[o + 11] & 0x10):
+                return struct.unpack_from('<H', buf, o + 26)[0]
+        return None
+
+    def ensure_dir(prefix):
+        if prefix in dir_bufs:
+            return dir_bufs[prefix]
+        parent, sep, leaf = prefix.rpartition('/')
+        if sep:
+            _, pbuf = ensure_dir(parent)
+            on_root = False
+        else:
+            pbuf = root
+            on_root = True
+        ent = dos_name(leaf)
+        cl = find_in_buf(pbuf, ent)
+        if cl is None:
+            cl = make_dir()
+            buf = bytearray(sectors_per_cluster * SECTOR)
+            if on_root:
+                root_add(leaf, 0x10, cl, 0)
+            else:
+                put_records(pbuf, len(pbuf) // 32, leaf, 0x10, cl, 0)
+        else:
+            buf = None
+            for c, b in dir_bufs.values():
+                if c == cl:
+                    buf = b
+                    break
+            if buf is None:
+                raise RuntimeError('untracked existing dir: ' + prefix)
+        dir_bufs[prefix] = [cl, buf]
+        return dir_bufs[prefix]
+
     for fatpath, data in (extras or []):
         parts = fatpath.split('/')
         start, _ = alloc_chain(len(data))
         write_chain(start, data)
         if len(parts) == 1:
-            root_add(dos_name(parts[0]), 0x20, start, len(data))
+            root_add(parts[0], 0x20, start, len(data))
         else:
-            if parts[0] not in dir_bufs:
-                cl = make_dir()
-                root_add(dos_name(parts[0]), 0x10, cl, 0)
-                dir_bufs[parts[0]] = [cl, bytearray(sectors_per_cluster * SECTOR)]
-            cl, buf = dir_bufs[parts[0]]
-            for i in range(sectors_per_cluster * SECTOR // 32):
-                o = i * 32
-                if buf[o] in (0x00, 0xE5):
-                    buf[o:o + 11] = dos_name(parts[1])
-                    buf[o + 11] = 0x20
-                    struct.pack_into('<H', buf, o + 20, 0)
-                    struct.pack_into('<H', buf, o + 26, start)
-                    struct.pack_into('<I', buf, o + 28, len(data))
-                    break
-            else:
-                raise RuntimeError('directory is full: ' + parts[0])
+            _, buf = ensure_dir('/'.join(parts[:-1]))
+            put_records(buf, len(buf) // 32, parts[-1], 0x20, start,
+                        len(data))
     for cl, buf in dir_bufs.values():
         write_chain(cl, bytes(buf))
 
@@ -178,7 +259,7 @@ def build_fat16(files, total_sectors=131072, startup_nsh=None, extras=None):  # 
         data = startup_nsh.encode('ascii')
         start, _ = alloc_chain(len(data))
         write_chain(start, data)
-        root_add(dos_name('STARTUP.NSH'), 0x20, start, len(data))
+        root_add('STARTUP.NSH', 0x20, start, len(data))
 
     # Root dir lives in the 32 sectors right before the data region.
     root_off = (first_data - root_sectors) * SECTOR
