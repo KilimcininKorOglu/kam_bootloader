@@ -25,10 +25,10 @@
 #define KAM_ARCH_NAME "unknown UEFI"
 #endif
 
-#define KAM_MAP_BUF_SIZE 8192u
+#define KAM_MAP_REQ_MAX (1u << 20) /* 1MB sanity cap on map bytes */
 #define KAM_KERNEL_MAX 131072u /* 128KB static read buffer */
 
-static kam_u8 kam_map_buf[KAM_MAP_BUF_SIZE];
+typedef kam_status_t (*kam_free_pool_fn)(void *p);
 static kam_memmap_t kam_map;
 static kam_u8 kam_info_buf[128];
 static kam_entry_t kam_scanout[KAM_SCAN_MAX];
@@ -153,24 +153,53 @@ static kam_usize kam_menu(kam_system_table_t *st, kam_usize count,
     return def;
 }
 
-/* Fill kam_map from GetMemoryMap. Returns the map key for ExitBootServices. */
+/* Fill kam_map from GetMemoryMap. Starts with a generous pool buffer and
+ * grows to the firmware-reported size on BUFFER_TOO_SMALL, so large maps
+ * (many descriptors) work instead of failing on a fixed static buffer.
+ * Returns the map key for ExitBootServices. */
 static kam_status_t kam_fill_map(kam_system_table_t *st, kam_usize *key_out) {
     kam_boot_services_t *bs = st->boot;
-    kam_usize size = KAM_MAP_BUF_SIZE;
+    kam_mem_desc_t *buf = 0;
+    kam_usize buf_size = 65536u;
+    kam_usize size = 0;
     kam_usize key = 0;
     kam_usize desc_size = 0;
     kam_u32 desc_ver = 0;
     kam_usize n, i;
     kam_status_t s;
+    int tries;
 
-    if (!bs || !bs->get_map)
+    if (!bs || !bs->get_map || !bs->alloc_pool)
         return KAM_EFI_UNSUPPORTED;
-    s = bs->get_map(&size, (kam_mem_desc_t *)kam_map_buf, &key,
-                    &desc_size, &desc_ver);
-    if (KAM_EFI_ERROR(s))
-        return s;
-    if (desc_size < sizeof(kam_mem_desc_t))
+    s = bs->alloc_pool(KAM_EFI_LOADER_DATA, buf_size, (void **)&buf);
+    if (KAM_EFI_ERROR(s) || !buf)
         return KAM_EFI_DEVICE_ERROR;
+    for (tries = 0; tries < 3; tries++) {
+        size = buf_size;
+        s = bs->get_map(&size, buf, &key, &desc_size, &desc_ver);
+        if (!KAM_EFI_ERROR(s))
+            break;
+        if (s != KAM_EFI_BUFFER_TOO_SMALL || size <= buf_size ||
+            size > KAM_MAP_REQ_MAX)
+            break;
+        if (bs->free_pool)
+            ((kam_free_pool_fn)bs->free_pool)(buf);
+        buf = 0;
+        buf_size = size;
+        s = bs->alloc_pool(KAM_EFI_LOADER_DATA, buf_size, (void **)&buf);
+        if (KAM_EFI_ERROR(s) || !buf)
+            return KAM_EFI_DEVICE_ERROR;
+    }
+    if (KAM_EFI_ERROR(s)) {
+        if (buf && bs->free_pool)
+            ((kam_free_pool_fn)bs->free_pool)(buf);
+        return s;
+    }
+    if (desc_size < sizeof(kam_mem_desc_t)) {
+        if (bs->free_pool)
+            ((kam_free_pool_fn)bs->free_pool)(buf);
+        return KAM_EFI_DEVICE_ERROR;
+    }
 
     n = size / desc_size;
     if (n > KAM_MEMMAP_MAX)
@@ -179,13 +208,15 @@ static kam_status_t kam_fill_map(kam_system_table_t *st, kam_usize *key_out) {
     kam_map._pad = 0;
     for (i = 0; i < n; i++) {
         const kam_mem_desc_t *d =
-            (const kam_mem_desc_t *)(kam_map_buf + i * desc_size);
+            (const kam_mem_desc_t *)((const kam_u8 *)buf + i * desc_size);
         kam_map.entries[i].base = d->phys;
         kam_map.entries[i].len = d->pages * 4096u;
         kam_map.entries[i].type =
             (d->type == KAM_EFI_CONVENTIONAL) ? 1u : d->type;
         kam_map.entries[i].flags = (kam_u32)(d->attr & 0xFFFFFFFFu);
     }
+    if (bs->free_pool)
+        ((kam_free_pool_fn)bs->free_pool)(buf);
     *key_out = key;
     return KAM_EFI_SUCCESS;
 }
