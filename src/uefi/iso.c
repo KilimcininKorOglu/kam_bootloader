@@ -38,7 +38,7 @@ int kam_iso_boot_report(const kam_u8 *img, kam_usize size,
                         kam_iso_putu putu) {
     const kam_u8 *pvd, *rec, *cat, *bootimg;
     kam_u32 root_lba, root_size, cat_lba, img_lba;
-    kam_u64 off, end;
+    kam_u64 end;
     int found = 0;
 
     /* Primary Volume Descriptor at LBA 16. */
@@ -53,52 +53,70 @@ int kam_iso_boot_report(const kam_u8 *img, kam_usize size,
     root_size = kam_rd32(pvd + 156 + 10);
     if (kam_sect(img, size, root_lba, &rec))
         return 1;
-    off = 0;
     end = root_size;
     {
         kam_u64 avail = size - (kam_u64)root_lba * KAM_SECTOR;
         if (end > avail)
             end = avail;
     }
-    if (end > KAM_SECTOR)
-        end = KAM_SECTOR;
-    while (off + 30 <= end) {
-        const kam_u8 *r = rec + off;
-        kam_u8 len = r[0];
-        kam_u8 flags, nlen;
-        kam_u32 ext, sz;
-        if (len == 0) {
-            off = (off / KAM_SECTOR + 1) * KAM_SECTOR;
-            continue;
-        }
-        if (len < 30 || off + len > end)
-            break;
-        /* Dot records are exactly 30 bytes with a 1-byte 0x00/0x01 name. */
-        if (len == 30 && r[28] == 1 && r[29] <= 1) {
-            off += len;
-            continue;
-        }
-        /* Anything else this short cannot carry a name: corrupt. */
-        if (len < 38)
-            break;
-        flags = r[25];
-        nlen = r[28];
-        ext = kam_rd32(r + 2);
-        sz = kam_rd32(r + 10);
-        if (!(flags & 2) && nlen >= 9 &&
-            kam_mem_eq(r + 29, (const kam_u8 *)"HELLO.TXT", 9)) {
-            const kam_u8 *data;
-            kam_usize i;
-            if (kam_sect(img, size, ext, &data))
+    /* Records never cross a sector boundary (zero-padded to the next
+     * one), so walk the directory sector by sector. */
+    {
+        kam_u64 abs = 0;
+        while (abs < end) {
+            kam_u64 sec = abs / KAM_SECTOR;
+            kam_u64 rem = (sec + 1) * KAM_SECTOR - abs;
+            const kam_u8 *base;
+            kam_u64 pos;
+            if (sec > (kam_u64)0xFFFFFFFFu - root_lba)
                 return 1;
-            if (sz < 14 || !kam_mem_eq(data, (const kam_u8 *)"hello from iso", 14))
+            if (rem > end - abs)
+                rem = end - abs;
+            if (kam_sect(img, size, root_lba + (kam_u32)sec, &base))
                 return 1;
-            puts("ISO file: ");
-            for (i = 0; i < 14; i++)
-                putc((char)data[i]);
-            found = 1;
+            pos = abs - sec * KAM_SECTOR;
+            while (rem >= 30) {
+                const kam_u8 *r = base + pos;
+                kam_u8 len = r[0];
+                kam_u8 flags, nlen;
+                kam_u32 ext, sz;
+                if (len == 0)
+                    break; /* padding to end of sector */
+                if (len < 30 || (kam_u64)len > rem)
+                    break;
+                /* Dot records are 30 bytes with a 1-byte 0x00/0x01 name. */
+                if (len == 30 && r[28] == 1 && r[29] <= 1) {
+                    pos += len;
+                    rem -= len;
+                    continue;
+                }
+                /* Anything else this short cannot carry a name: corrupt. */
+                if (len < 38)
+                    break;
+                flags = r[25];
+                nlen = r[28];
+                ext = kam_rd32(r + 2);
+                sz = kam_rd32(r + 10);
+                if (!(flags & 2) && nlen >= 9 &&
+                    kam_mem_eq(r + 29, (const kam_u8 *)"HELLO.TXT", 9)) {
+                    const kam_u8 *data;
+                    kam_usize i;
+                    if (kam_sect(img, size, ext, &data))
+                        return 1;
+                    if (sz < 14 ||
+                        !kam_mem_eq(data, (const kam_u8 *)"hello from iso",
+                                    14))
+                        return 1;
+                    puts("ISO file: ");
+                    for (i = 0; i < 14; i++)
+                        putc((char)data[i]);
+                    found = 1;
+                }
+                pos += len;
+                rem -= len;
+            }
+            abs = (sec + 1) * KAM_SECTOR;
         }
-        off += len;
     }
     if (!found)
         return 1;
