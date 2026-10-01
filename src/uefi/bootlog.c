@@ -4,7 +4,6 @@
 #include "kam/bootlog.h"
 #include "kam/efi.h"
 #include "kam/console.h"
-#include "kam/raw_serial.h"
 
 static kam_u8 kam_log_buf[KAM_LOG_SIZE];
 static kam_usize kam_log_len;
@@ -26,16 +25,9 @@ static const kam_char16 KAM_LOG_PATH[] = {
 #define KAM_EFI_FILE_MODE_RW_CREATE \
     (1u | 2u | ((kam_u64)1u << 63))
 
-static void kam_log_raw(char c) {
-    kam_raw_putc(c);
-}
-
 void kam_log(const char *s) {
     const char *p = s;
     while (*p) {
-        if (*p == '\n')
-            kam_log_raw('\r');
-        kam_log_raw(*p);
         if (kam_log_len + 1 < KAM_LOG_SIZE)
             kam_log_buf[kam_log_len++] = (kam_u8)*p;
         p++;

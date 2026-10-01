@@ -1,9 +1,10 @@
 #ifndef KAM_BOOTLOG_H
 #define KAM_BOOTLOG_H
 
-/* In-memory boot log with ConOut + serial mirror. Events are recorded
- * during the boot-services phase and flushed to KAM/BOOT.LOG before
- * ExitBS (or before returning to firmware on chain/probe paths).
+/* In-memory boot log mirrored to ConOut (which reaches serial where the
+ * firmware routes it there). Events are recorded during the
+ * boot-services phase and flushed to KAM/BOOT.LOG before ExitBS (or
+ * before returning to firmware on chain/probe paths).
  * Never logs secrets: the password gate logs only outcomes. */
 
 #include "types.h"
