@@ -51,6 +51,23 @@ typedef struct kam_simple_text_out {
 /* Forward: full definition follows below (needed by kam_system_table_t). */
 typedef struct kam_boot_services kam_boot_services_t;
 
+#define KAM_EFI_NOT_READY ((kam_status_t)11)
+
+typedef struct kam_key {
+    kam_u16 scan;
+    kam_char16 unicode;
+} kam_key_t;
+
+struct kam_text_in;
+typedef kam_status_t (*kam_read_key_fn)(struct kam_text_in *self,
+                                        kam_key_t *key);
+
+typedef struct kam_text_in {
+    void *reset;
+    kam_read_key_fn read_key;
+    void *wait_for_key;
+} kam_text_in_t;
+
 /* SYSTEM_TABLE: minimal layout to reach ConsoleOut + BootServices.
  * Offsets follow the UEFI spec: Hdr is 24 bytes (not pointer-sized),
  * FirmwareRevision is 32-bit with 32-bit padding after it. */
@@ -60,7 +77,7 @@ typedef struct kam_system_table {
     kam_u32                 firmware_rev;        /* offset 32 */
     kam_u32                 _pad0;               /* offset 36 */
     kam_handle_t            console_in;          /* offset 40 */
-    void                   *con_in;              /* offset 48 */
+    kam_text_in_t          *con_in;              /* offset 48 */
     kam_handle_t            console_out_handle;  /* offset 56 */
     kam_simple_text_out_t  *con_out;             /* offset 64 */
     kam_handle_t            stderr_handle;       /* offset 72 */
@@ -100,6 +117,7 @@ typedef kam_status_t (*kam_alloc_pool_fn)(kam_u32 memtype, kam_usize size,
 typedef kam_status_t (*kam_handle_proto_fn)(kam_handle_t handle,
                                              const kam_guid_t *guid,
                                              void **iface);
+typedef kam_status_t (*kam_stall_fn)(kam_usize microseconds);
 
 #define KAM_ALLOC_ADDRESS 2u
 #define KAM_EFI_LOADER_DATA 2u
@@ -200,8 +218,10 @@ struct kam_boot_services {
     void *exit;             /* +216 */
     void *unload_image;     /* +224 */
     kam_exit_bs_fn exit_bs; /* +232 */
+    void *getnextcount;     /* +240 */
+    kam_stall_fn stall;     /* +248 */
 };
 
-KAM_STATIC_ASSERT(sizeof(kam_boot_services_t) == 240, boot_services_size);
+KAM_STATIC_ASSERT(sizeof(kam_boot_services_t) == 256, boot_services_size);
 
 #endif

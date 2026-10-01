@@ -139,6 +139,28 @@ static kam_status_t kam_read_kernel(kam_handle_t image,
 
 typedef void (*kam_kernel_fn)(const kam_memmap_t *map);
 
+/* One-entry boot menu on ConIn. Timeout boots the default. */
+static int kam_menu(kam_system_table_t *st) {
+    kam_text_in_t *cin = st->con_in;
+    kam_key_t key;
+    kam_status_t s;
+    int t;
+
+    kam_puts(st, "1) KAM-KERNEL\n");
+    if (!cin || !cin->read_key || !st->boot->stall) {
+        kam_puts(st, "No input services, booting default.\n");
+        return 1;
+    }
+    kam_puts(st, "Booting 1 in 3s, press 1 for now.\n");
+    for (t = 0; t < 30; t++) {
+        s = cin->read_key(cin, &key);
+        if (s == KAM_EFI_SUCCESS && key.unicode == (kam_char16)'1')
+            return 1;
+        st->boot->stall(100000);
+    }
+    return 1;
+}
+
 /* UEFI entry point: the linker script makes this symbol the entry. */
 kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
     kam_boot_services_t *bs;
@@ -159,6 +181,7 @@ kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
 
     /* No screen clear: ClearScreen is optional on some firmware. */
     kam_puts(st, "KAM " KAM_ARCH_NAME "\n");
+    (void)kam_menu(st);
 
     s = kam_fill_map(st, &key);
     if (KAM_EFI_ERROR(s)) {
