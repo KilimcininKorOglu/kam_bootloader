@@ -13,6 +13,7 @@
 #include "kam/scan.h"
 #include "kam/iso.h"
 #include "kam/config.h"
+#include "kam/gop.h"
 
 #if defined(__x86_64__)
 #define KAM_ARCH_NAME "x86_64 UEFI"
@@ -323,6 +324,20 @@ static kam_status_t kam_boot_elf(kam_handle_t image, kam_system_table_t *st,
         }
     }
     kam_elf_commit(kimg, segs, nseg);
+
+    /* Paint the header last: on GOP consoles ConOut text shares the
+     * framebuffer, so earlier text would dirty the art. After this only
+     * direct serial is used, leaving the art pristine for the kernel. */
+    {
+        kam_u32 gw = 0, gh = 0;
+        if (kam_gop_draw(bs, &gw, &gh)) {
+            kam_puts(st, "GOP ");
+            kam_put_u64(st, (kam_u64)gw);
+            kam_puts(st, "x");
+            kam_put_u64(st, (kam_u64)gh);
+            kam_puts(st, "\n");
+        }
+    }
 
     /* ExitBootServices with map-key retry (the map may change under us). */
     for (tries = 0; tries < 3; tries++) {
