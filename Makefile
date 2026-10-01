@@ -79,13 +79,13 @@ run-aa64: uefi-aa64
 	  -drive format=raw,file=$(BUILD)/esp_aa64.img -nographic -net none -device ramfb
 
 test-x64: esp
-	sh tools/boot_test.sh $(BUILD)/test_x64.log '\EFI\BOOT\BOOTX64.EFI' 45 -- \
+	sh tools/boot_test.sh $(BUILD)/test_x64.log '\EFI\BOOT\BOOTX64.EFI' 45 'boot services exited' -- \
 	  qemu-system-x86_64 -drive if=pflash,format=raw,readonly=on,file=$(QEMU_X64_FW) \
 	  -drive format=raw,file=$(BUILD)/esp.img -nographic -net none
 
 test-aa64: uefi-aa64
 	python3 tools/mkesp.py --out $(BUILD)/esp_aa64.img --aa64 $(BUILD)/BOOTAA64.EFI --startup-nsh
-	sh tools/boot_test.sh $(BUILD)/test_aa64.log '\EFI\BOOT\BOOTAA64.EFI' 60 -- \
+	sh tools/boot_test.sh $(BUILD)/test_aa64.log '\EFI\BOOT\BOOTAA64.EFI' 60 'boot services exited' -- \
 	  qemu-system-aarch64 -M virt -cpu cortex-a72 -bios $(QEMU_AA64_FW) \
 	  -drive format=raw,file=$(BUILD)/esp_aa64.img -nographic -net none -device ramfb
 
