@@ -74,6 +74,8 @@ kam_usize kam_config_parse(const kam_u8 *buf, kam_usize size,
     for (i = 0; i < max; i++) {
         kam_usize j;
         out[i].kind = KAM_ENTRY_ELF;
+        out[i].dev = 0;
+        out[i].vol = 0;
         for (j = 0; j < KAM_PATH_CHARS; j++) {
             out[i].path[j] = 0;
             out[i].initrd[j] = 0;

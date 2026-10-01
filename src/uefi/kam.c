@@ -109,7 +109,9 @@ static kam_usize kam_menu(kam_system_table_t *st, kam_usize count,
 
     for (i = 0; i < count; i++) {
         kam_put_u64(st, (kam_u64)(i + 1));
-        kam_puts(st, ") ");
+        kam_puts(st, ") [hd");
+        kam_put_u64(st, (kam_u64)kam_entries[i].vol);
+        kam_puts(st, "] ");
         kam_puts(st, kam_entries[i].label);
         kam_puts(st, kam_entries[i].kind == KAM_ENTRY_ELF ? " [elf]\n"
                  : kam_entries[i].kind == KAM_ENTRY_EFI  ? " [efi]\n"
@@ -364,11 +366,10 @@ static kam_status_t kam_boot_elf(kam_handle_t image, kam_system_table_t *st,
     return KAM_EFI_SUCCESS;
 }
 
-/* EFI chainload: device path + FILEPATH node, LoadImage + StartImage. */
+/* EFI chainload: volume device path + FILEPATH node, LoadImage/StartImage. */
 static kam_status_t kam_chainload(kam_boot_services_t *bs,
-                                  kam_handle_t image,
+                                  kam_handle_t image, kam_handle_t dev,
                                   const kam_char16 *path) {
-    kam_loaded_image_t *li = 0;
     const kam_u8 *base;
     const kam_u8 *p;
     kam_usize prefix, n, node_len, total;
@@ -377,11 +378,8 @@ static kam_status_t kam_chainload(kam_boot_services_t *bs,
     kam_status_t s;
     kam_usize i;
 
-    s = bs->handle_proto(image, &KAM_GUID_LOADED_IMAGE, (void **)&li);
-    if (KAM_EFI_ERROR(s) || !li)
-        return KAM_EFI_NOT_FOUND;
-    /* Our own FilePath is relative; resolve against the device path. */
-    s = bs->handle_proto(li->dev_handle, &KAM_GUID_DEVPATH, (void **)&base);
+    /* Resolve against the entry's own volume device path. */
+    s = bs->handle_proto(dev, &KAM_GUID_DEVPATH, (void **)&base);
     if (KAM_EFI_ERROR(s) || !base)
         return KAM_EFI_NOT_FOUND;
     p = base;
@@ -469,12 +467,15 @@ static void kam_win_probe(kam_system_table_t *st, kam_file_proto_t *root) {
 kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
     kam_boot_services_t *bs;
     kam_file_proto_t *root = 0;
+    kam_loaded_image_t *li = 0;
+    kam_handle_t our_dev = 0;
     kam_usize count = 0;
     kam_usize timeout = 5;
     kam_usize def = 0;
     kam_usize sel;
     kam_usize nscan, i;
     kam_status_t s;
+    kam_handle_t sel_dev = 0;
 
     if (!st || !st->con_out || !st->boot)
         return KAM_EFI_UNSUPPORTED;
@@ -488,6 +489,10 @@ kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
         kam_puts(st, "KAM: no volume\n");
         return KAM_EFI_NOT_FOUND;
     }
+    if (!KAM_EFI_ERROR(
+            bs->handle_proto(image, &KAM_GUID_LOADED_IMAGE, (void **)&li)) &&
+        li)
+        our_dev = li->dev_handle;
     kam_win_probe(st, root);
 
     /* Static config first: KAM/KAM.INI. Missing file = dynamic only. */
@@ -505,13 +510,14 @@ kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
         }
     }
 
-    /* Append scanned files not already listed. */
-    nscan = kam_scan(bs, image, kam_scanout, KAM_SCAN_MAX);
+    /* Append scanned files not already listed (same volume + path). */
+    nscan = kam_scan_all(bs, image, kam_scanout, KAM_SCAN_MAX);
     for (i = 0; i < nscan && count < KAM_SCAN_MAX; i++) {
         kam_usize j;
         int dup = 0;
         for (j = 0; j < count; j++) {
-            if (kam_path_eq(kam_scanout[i].path, kam_entries[j].path)) {
+            if (kam_scanout[i].vol == kam_entries[j].vol &&
+                kam_path_eq(kam_scanout[i].path, kam_entries[j].path)) {
                 dup = 1;
                 break;
             }
@@ -520,10 +526,16 @@ kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
             /* Field copy: no memcpy in freestanding. */
             kam_usize f;
             kam_entries[count].kind = kam_scanout[i].kind;
-            for (f = 0; f < KAM_PATH_CHARS; f++)
+            kam_entries[count].dev = kam_scanout[i].dev;
+            kam_entries[count].vol = kam_scanout[i].vol;
+            for (f = 0; f < KAM_PATH_CHARS; f++) {
                 kam_entries[count].path[f] = kam_scanout[i].path[f];
+                kam_entries[count].initrd[f] = kam_scanout[i].initrd[f];
+            }
             for (f = 0; f < KAM_LABEL_CHARS; f++)
                 kam_entries[count].label[f] = kam_scanout[i].label[f];
+            for (f = 0; f < 128; f++)
+                kam_entries[count].cmdline[f] = kam_scanout[i].cmdline[f];
             count++;
         }
     }
@@ -532,6 +544,16 @@ kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
         return KAM_EFI_NOT_FOUND;
     }
     sel = kam_menu(st, count, timeout, def);
+    sel_dev = kam_entries[sel].dev ? kam_entries[sel].dev : our_dev;
+    if (sel_dev && sel_dev != our_dev) {
+        kam_file_proto_t *eroot = 0;
+        if (KAM_EFI_ERROR(kam_fs_open_volume(bs, sel_dev, &eroot)) ||
+            !eroot) {
+            kam_puts(st, "KAM: volume unavailable\n");
+            return KAM_EFI_NOT_FOUND;
+        }
+        root = eroot;
+    }
     if (kam_entries[sel].kind == KAM_ENTRY_ELF)
         return kam_boot_elf(image, st, root, kam_entries[sel].path);
     if (kam_entries[sel].kind == KAM_ENTRY_LINUX) {
@@ -593,7 +615,8 @@ kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
     kam_puts(st, "KAM: chainloading ");
     kam_put_path(st, kam_entries[sel].path);
     kam_puts(st, "\n");
-    s = kam_chainload(bs, image, kam_entries[sel].path);
+    s = kam_chainload(bs, image, sel_dev ? sel_dev : our_dev,
+                      kam_entries[sel].path);
     kam_puts(st, "KAM: chainload returned\n");
     return s;
 }

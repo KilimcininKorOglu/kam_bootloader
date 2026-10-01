@@ -323,11 +323,11 @@ def main():
     if a.aa64:
         with open(a.aa64, 'rb') as f:
             files.append(('BOOTAA64.EFI', f.read()))
-    if not files:
+    if not files and not a.extra:
         print('mkesp: no EFI files to add', file=sys.stderr)
         return 1
-    first = files[0][0]
-    nsh = f'\\EFI\\BOOT\\{first}\r\n' if a.startup_nsh else None
+    first = files[0][0] if files else None
+    nsh = f'\\EFI\\BOOT\\{first}\r\n' if (a.startup_nsh and first) else None
     extras = []
     for item in a.extra:
         src, _, dst = item.partition(':')
