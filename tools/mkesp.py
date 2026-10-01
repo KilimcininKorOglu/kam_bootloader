@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""KAM mkesp: build a FAT16 ESP image in pure python (no mtools needed).
+"""KAM mkesp: build a partitioned ESP disk image in pure python (no mtools).
 Usage: mkesp.py --out build/esp.img --x64 build/BOOTX64.EFI [--aa64 build/BOOTAA64.EFI]
-64MB FAT16 raw image (attach in QEMU with -drive format=raw).
+
+Layout: MBR with one bootable FAT16 partition (type 0x0E) + FAT16 volume.
+A partition table is required: OVMF/EDK2 only auto-boot
+EFI/BOOT/BOOT{ARCH}.EFI from a partitioned hard disk, not a superfloppy.
 """
 import argparse
 import os
@@ -9,8 +12,9 @@ import struct
 import sys
 
 SECTOR = 512
+PART_START = 2048  # 1MiB alignment, standard for ESPs
 
-def build_fat16(files, total_sectors=131072):  # 64MB
+def build_fat16(files, total_sectors=131072, startup_nsh=None):  # 64MiB volume
     reserved = 4
     fats = 2
     sectors_per_fat = 256
@@ -18,12 +22,10 @@ def build_fat16(files, total_sectors=131072):  # 64MB
     sectors_per_cluster = 4  # 2KB clusters
     root_sectors = root_entries * 32 // SECTOR
     first_data = reserved + fats * sectors_per_fat + root_sectors
-    data_sectors = total_sectors - first_data
-    clusters = data_sectors // sectors_per_cluster
 
-    img = bytearray(total_sectors * SECTOR)
+    vol = bytearray(total_sectors * SECTOR)
 
-    # --- boot sector (BPB) ---
+    # --- boot sector (BPB), LBA-relative to the partition start ---
     bpb = bytearray(SECTOR)
     bpb[0:3] = b'\xEB\x3C\x90'
     bpb[3:11] = b'KAMBOOT '
@@ -37,7 +39,7 @@ def build_fat16(files, total_sectors=131072):  # 64MB
     struct.pack_into('<H', bpb, 22, sectors_per_fat)
     struct.pack_into('<H', bpb, 24, 63)
     struct.pack_into('<H', bpb, 26, 255)
-    struct.pack_into('<I', bpb, 28, 0)
+    struct.pack_into('<I', bpb, 28, PART_START)  # hidden sectors
     struct.pack_into('<I', bpb, 32, total_sectors)
     bpb[36] = 0x80
     bpb[38] = 0x29
@@ -45,17 +47,17 @@ def build_fat16(files, total_sectors=131072):  # 64MB
     bpb[43:54] = b'KAM ESP    '
     bpb[54:62] = b'FAT16   '
     bpb[510:512] = b'\x55\xAA'
-    img[0:SECTOR] = bpb
+    vol[0:SECTOR] = bpb
 
     # --- FAT tables ---
     for f in range(fats):
         off = (reserved + f * sectors_per_fat) * SECTOR
-        struct.pack_into('<HHH', img, off, 0xFFF8, 0xFFFF, 0xFFFF)
+        struct.pack_into('<HHH', vol, off, 0xFFF8, 0xFFFF, 0xFFFF)
 
     def fat_set(cluster, val):
         for f in range(fats):
             off = (reserved + f * sectors_per_fat) * SECTOR + cluster * 2
-            struct.pack_into('<H', img, off, val)
+            struct.pack_into('<H', vol, off, val)
 
     def cluster_off(cluster):
         return (first_data + (cluster - 2) * sectors_per_cluster) * SECTOR
@@ -81,11 +83,11 @@ def build_fat16(files, total_sectors=131072):  # 64MB
         while True:
             base = cluster_off(c)
             chunk = data[off:off + sectors_per_cluster * SECTOR]
-            img[base:base + len(chunk)] = chunk
+            vol[base:base + len(chunk)] = chunk
             off += len(chunk)
             # Read next from the first FAT.
             foff = reserved * SECTOR + c * 2
-            nxt = struct.unpack_from('<H', img, foff)[0]
+            nxt = struct.unpack_from('<H', vol, foff)[0]
             if nxt >= 0xFFF8:
                 break
             c = nxt
@@ -104,12 +106,13 @@ def build_fat16(files, total_sectors=131072):  # 64MB
             if root[o] in (0x00, 0xE5):
                 root[o:o + 11] = dosname
                 root[o + 11] = attr
-                struct.pack_into('<HHH', root, o + 26, 0, 0, cluster)
-                struct.pack_into('<I', root, o + 28, size)
+                struct.pack_into('<H', root, o + 20, 0)        # cluster high (FAT16: 0)
+                struct.pack_into('<H', root, o + 26, cluster)  # cluster low
+                struct.pack_into('<I', root, o + 28, size)     # file size
                 return
         raise RuntimeError('root directory is full')
 
-    # Directories: EFI, EFI/BOOT (cluster chains with . .. entries).
+    # Directories: EFI, EFI/BOOT.
     def make_dir():
         start, _ = alloc_chain(sectors_per_cluster * SECTOR)
         d = bytearray(sectors_per_cluster * SECTOR)
@@ -141,7 +144,34 @@ def build_fat16(files, total_sectors=131072):  # 64MB
         struct.pack_into('<I', boot_data, o + 28, sz)
     write_chain(boot_cl, bytes(boot_data))
 
-    img[first_data * SECTOR:(first_data + root_sectors) * SECTOR] = root
+    # Optional shell fallback: the UEFI shell auto-runs STARTUP.NSH.
+    # Needed for QEMU hard disks (non-removable, no auto Boot#### entry).
+    if startup_nsh:
+        data = startup_nsh.encode('ascii')
+        start, _ = alloc_chain(len(data))
+        write_chain(start, data)
+        root_add(dos_name('STARTUP.NSH'), 0x20, start, len(data))
+
+    # Root dir lives in the 32 sectors right before the data region.
+    root_off = (first_data - root_sectors) * SECTOR
+    vol[root_off:root_off + root_sectors * SECTOR] = root
+
+    # --- MBR with one bootable FAT16-LBA partition ---
+    disk_sectors = PART_START + total_sectors
+    img = bytearray(disk_sectors * SECTOR)
+    mbr = bytearray(SECTOR)
+    struct.pack_into('<I', mbr, 440, 0x4B414D21)  # disk signature
+    # Partition entry 0 at offset 446: bootable, type 0x0E, LBA range.
+    p = 446
+    mbr[p + 0] = 0x80          # boot flag
+    mbr[p + 1:p + 4] = b'\xFF\xFF\xFF'  # start CHS (LBA-only)
+    mbr[p + 4] = 0x0E          # FAT16 LBA
+    mbr[p + 5:p + 8] = b'\xFF\xFF\xFF'  # end CHS (LBA-only)
+    struct.pack_into('<I', mbr, p + 8, PART_START)
+    struct.pack_into('<I', mbr, p + 12, total_sectors)
+    mbr[510:512] = b'\x55\xAA'
+    img[0:SECTOR] = mbr
+    img[PART_START * SECTOR:] = vol
     return bytes(img)
 
 
@@ -150,6 +180,8 @@ def main():
     ap.add_argument('--out', required=True)
     ap.add_argument('--x64', default=None)
     ap.add_argument('--aa64', default=None)
+    ap.add_argument('--startup-nsh', action='store_true',
+                    help='add STARTUP.NSH fallback launching the default loader')
     a = ap.parse_args()
     files = []
     if a.x64:
@@ -161,7 +193,9 @@ def main():
     if not files:
         print('mkesp: no EFI files to add', file=sys.stderr)
         return 1
-    img = build_fat16(files)
+    first = files[0][0]
+    nsh = f'\\EFI\\BOOT\\{first}\r\n' if a.startup_nsh else None
+    img = build_fat16(files, startup_nsh=nsh)
     os.makedirs(os.path.dirname(a.out) or '.', exist_ok=True)
     with open(a.out, 'wb') as f:
         f.write(img)
