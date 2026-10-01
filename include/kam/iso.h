@@ -7,12 +7,12 @@
 
 #include "types.h"
 
-typedef void (*kam_log_puts)(const char *s);
-typedef void (*kam_log_putc)(char c);
-typedef void (*kam_log_u64)(kam_u64 v);
+typedef void (*kam_iso_puts)(const char *s);
+typedef void (*kam_iso_putc)(char c);
+typedef void (*kam_iso_putu)(kam_u64 v);
 
 int kam_iso_boot_report(const kam_u8 *img, kam_usize size,
-                        kam_log_puts puts, kam_log_putc putc,
-                        kam_log_u64 putu);
+                        kam_iso_puts puts, kam_iso_putc putc,
+                        kam_iso_putu putu);
 
 #endif

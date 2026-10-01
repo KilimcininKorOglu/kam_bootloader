@@ -34,8 +34,8 @@ static int kam_sect(const kam_u8 *img, kam_usize size, kam_u32 lba,
 }
 
 int kam_iso_boot_report(const kam_u8 *img, kam_usize size,
-                        kam_log_puts puts, kam_log_putc putc,
-                        kam_log_u64 putu) {
+                        kam_iso_puts puts, kam_iso_putc putc,
+                        kam_iso_putu putu) {
     const kam_u8 *pvd, *rec, *cat, *bootimg;
     kam_u32 root_lba, root_size, cat_lba, img_lba;
     kam_u64 off, end;

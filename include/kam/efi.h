@@ -176,6 +176,10 @@ typedef kam_status_t (*kam_file_read_fn)(kam_file_proto_t *self,
 typedef kam_status_t (*kam_file_getinfo_fn)(kam_file_proto_t *self,
                                              const kam_guid_t *type,
                                              kam_usize *size, void *buf);
+typedef kam_status_t (*kam_file_write_fn)(kam_file_proto_t *self,
+                                           kam_usize *size, void *buf);
+typedef kam_status_t (*kam_file_close_fn)(kam_file_proto_t *self);
+typedef kam_status_t (*kam_file_del_fn)(kam_file_proto_t *self);
 typedef kam_status_t (*kam_file_setpos_fn)(kam_file_proto_t *self,
                                             kam_u64 pos);
 
@@ -188,10 +192,10 @@ struct kam_fs_proto {
 struct kam_file_proto {
     kam_u64 rev;              /* +0 */
     kam_file_open_fn open;    /* +8 */
-    void *close;              /* +16 */
-    void *del;                /* +24 */
+    kam_file_close_fn close;  /* +16 */
+    kam_file_del_fn del;      /* +24 */
     kam_file_read_fn read;    /* +32 */
-    void *write;              /* +40 */
+    kam_file_write_fn write;  /* +40 */
     void *getpos;             /* +48 */
     kam_file_setpos_fn setpos; /* +56 */
     kam_file_getinfo_fn getinfo; /* +64 */

@@ -20,7 +20,7 @@ KAM_HEADERS := include/kam/efi.h include/kam/types.h include/kam/console.h \
                include/kam/memmap.h include/kam/elf.h include/kam/raw_serial.h \
                include/kam/scan.h include/kam/iso.h include/kam/config.h \
                include/kam/gop.h include/kam/linux.h include/kam/bzimage.h \
-               include/kam/sha256.h
+               include/kam/sha256.h include/kam/bootlog.h
 KERN_HEADERS := include/kam/types.h include/kam/memmap.h \
                 include/kam/elf.h include/kam/raw_serial.h \
                 include/kam/bzimage.h
@@ -116,15 +116,23 @@ $(BUILD)/sha_aa64.o: src/uefi/sha256.c $(KAM_HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC_AA64) $(CFLAGS) src/uefi/sha256.c -o $@
 
-$(BUILD)/BOOTX64.EFI: $(BUILD)/kam_x64.o $(BUILD)/scan_x64.o $(BUILD)/iso_x64.o $(BUILD)/config_x64.o $(BUILD)/gop_x64.o $(BUILD)/linux_x64.o $(BUILD)/sha_x64.o linker/uefi_x64.ld
-	@test -x $(LD_LLD) || (echo "ld.lld missing: brew install lld"; exit 1)
-	$(LD_LLD) -flavor link -subsystem:efi_application -entry:efi_main \
-	  -out:$@ $(BUILD)/kam_x64.o $(BUILD)/scan_x64.o $(BUILD)/iso_x64.o $(BUILD)/config_x64.o $(BUILD)/gop_x64.o $(BUILD)/linux_x64.o $(BUILD)/sha_x64.o
+$(BUILD)/bootlog_x64.o: src/uefi/bootlog.c $(KAM_HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC_X64) $(CFLAGS) src/uefi/bootlog.c -o $@
 
-$(BUILD)/BOOTAA64.EFI: $(BUILD)/kam_aa64.o $(BUILD)/scan_aa64.o $(BUILD)/iso_aa64.o $(BUILD)/config_aa64.o $(BUILD)/gop_aa64.o $(BUILD)/linux_aa64.o $(BUILD)/sha_aa64.o linker/uefi_aa64.ld
+$(BUILD)/bootlog_aa64.o: src/uefi/bootlog.c $(KAM_HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC_AA64) $(CFLAGS) src/uefi/bootlog.c -o $@
+
+$(BUILD)/BOOTX64.EFI: $(BUILD)/kam_x64.o $(BUILD)/scan_x64.o $(BUILD)/iso_x64.o $(BUILD)/config_x64.o $(BUILD)/gop_x64.o $(BUILD)/linux_x64.o $(BUILD)/sha_x64.o $(BUILD)/bootlog_x64.o linker/uefi_x64.ld
 	@test -x $(LD_LLD) || (echo "ld.lld missing: brew install lld"; exit 1)
 	$(LD_LLD) -flavor link -subsystem:efi_application -entry:efi_main \
-	  -out:$@ $(BUILD)/kam_aa64.o $(BUILD)/scan_aa64.o $(BUILD)/iso_aa64.o $(BUILD)/config_aa64.o $(BUILD)/gop_aa64.o $(BUILD)/linux_aa64.o $(BUILD)/sha_aa64.o
+	  -out:$@ $(BUILD)/kam_x64.o $(BUILD)/scan_x64.o $(BUILD)/iso_x64.o $(BUILD)/config_x64.o $(BUILD)/gop_x64.o $(BUILD)/linux_x64.o $(BUILD)/sha_x64.o $(BUILD)/bootlog_x64.o
+
+$(BUILD)/BOOTAA64.EFI: $(BUILD)/kam_aa64.o $(BUILD)/scan_aa64.o $(BUILD)/iso_aa64.o $(BUILD)/config_aa64.o $(BUILD)/gop_aa64.o $(BUILD)/linux_aa64.o $(BUILD)/sha_aa64.o $(BUILD)/bootlog_aa64.o linker/uefi_aa64.ld
+	@test -x $(LD_LLD) || (echo "ld.lld missing: brew install lld"; exit 1)
+	$(LD_LLD) -flavor link -subsystem:efi_application -entry:efi_main \
+	  -out:$@ $(BUILD)/kam_aa64.o $(BUILD)/scan_aa64.o $(BUILD)/iso_aa64.o $(BUILD)/config_aa64.o $(BUILD)/gop_aa64.o $(BUILD)/linux_aa64.o $(BUILD)/sha_aa64.o $(BUILD)/bootlog_aa64.o
 
 # --- HELLO.EFI chainload fixtures (entry: hello_main)
 $(BUILD)/hello_x64.o: src/uefi/hello.c $(KAM_HEADERS)
@@ -176,6 +184,7 @@ test-x64: esp
 	python3 tools/drive_boot.py $(BUILD)/test_x64.log 40 'KAM-KERNEL' '' 20 -- \
 	  qemu-system-x86_64 -drive if=pflash,format=raw,readonly=on,file=$(QEMU_X64_FW) \
 	  -drive format=raw,file=$(BUILD)/esp.img -nographic -net none
+	python3 tools/fatread.py $(BUILD)/esp.img KAM/BOOT.LOG | grep -q "exiting boot services"
 
 test-chain-x64: esp
 	python3 tools/drive_boot.py $(BUILD)/test_chain_x64.log 40 'KAM-HELLO' '2' 20 -- \
@@ -190,6 +199,7 @@ test-aa64: uefi-aa64 kernel-aa64 hello-aa64 testiso
 	python3 tools/drive_boot.py $(BUILD)/test_aa64.log 90 'KAM-KERNEL' '' 55 -- \
 	  qemu-system-aarch64 -M virt -cpu cortex-a72 -bios $(QEMU_AA64_FW) \
 	  -drive format=raw,file=$(BUILD)/esp_aa64.img -nographic -net none -device ramfb
+	python3 tools/fatread.py $(BUILD)/esp_aa64.img KAM/BOOT.LOG | grep -q "exiting boot services"
 
 test-iso-x64: esp
 	python3 tools/drive_boot.py $(BUILD)/test_iso_x64.log 40 'KAM-ISO-OK' '3' 20 -- \
