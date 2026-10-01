@@ -120,6 +120,12 @@ typedef kam_status_t (*kam_handle_proto_fn)(kam_handle_t handle,
 typedef kam_status_t (*kam_stall_fn)(kam_usize microseconds);
 typedef kam_status_t (*kam_locate_proto_fn)(const kam_guid_t *guid,
                                              void *reg, void **iface);
+typedef kam_status_t (*kam_locate_handles_fn)(kam_u32 search,
+                                               const kam_guid_t *guid,
+                                               void *key, kam_usize *n,
+                                               kam_handle_t **buf);
+
+#define KAM_BY_PROTOCOL 2u
 typedef kam_status_t (*kam_load_image_fn)(kam_u8 policy, kam_handle_t parent,
                                            const void *path, void *src,
                                            kam_usize size, kam_handle_t *out);
@@ -241,7 +247,7 @@ struct kam_boot_services {
     void *closeproto;       /* +288 */
     void *openprotoinfo;    /* +296 */
     void *protosperhandle;  /* +304 */
-    void *locatehandlebuf;  /* +312 */
+    kam_locate_handles_fn locatehandlebuf; /* +312 */
     kam_locate_proto_fn locateproto; /* +320 */
 };
 
