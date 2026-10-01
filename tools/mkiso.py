@@ -77,6 +77,7 @@ def main():
     pvd[1:6] = b"CD001"
     pvd[6] = 1
     pvd[8:8 + 11] = fix(b"KAM_TEST_ISO", 11)
+    pvd[40:40 + 32] = fix(b"KAM_TEST_ISO", 32)
     pvd[80:88] = both32(nsec)
     pvd[156:156 + 34] = fix(dir_record(20, SECTOR, 2, b"\x00"), 34)
     img[16 * SECTOR:17 * SECTOR] = pvd
