@@ -8,7 +8,7 @@
 #include "efi.h"
 
 #define KAM_SCAN_MAX 16u
-#define KAM_SCAN_DEPTH 3
+#define KAM_SCAN_DEPTH 4
 #define KAM_PATH_CHARS 96u
 #define KAM_LABEL_CHARS 64u
 

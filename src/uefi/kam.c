@@ -362,9 +362,8 @@ static kam_status_t kam_boot_elf(kam_handle_t image, kam_system_table_t *st,
     return KAM_EFI_SUCCESS;
 }
 
-/* EFI chainload: our FilePath + FILEPATH node, LoadImage + StartImage. */
-static kam_status_t kam_chainload(kam_system_table_t *st,
-                                  kam_boot_services_t *bs,
+/* EFI chainload: device path + FILEPATH node, LoadImage + StartImage. */
+static kam_status_t kam_chainload(kam_boot_services_t *bs,
                                   kam_handle_t image,
                                   const kam_char16 *path) {
     kam_loaded_image_t *li = 0;
@@ -419,6 +418,51 @@ static kam_status_t kam_chainload(kam_system_table_t *st,
     return bs->start_image(child, 0, 0);
 }
 
+/* Windows layout probe: existence checks for the well-known markers.
+ * bootmgfw.efi itself is chainloaded through the normal .EFI path;
+ * WinPE remount + driver injection happen inside Windows, out of scope. */
+static int kam_try_open(kam_file_proto_t *root, const kam_char16 *path) {
+    kam_file_proto_t *f = 0;
+    kam_status_t s;
+    if (!root || !root->open)
+        return 0;
+    s = root->open(root, &f, path, KAM_EFI_FILE_MODE_READ, 0);
+    return !KAM_EFI_ERROR(s) && f != 0;
+}
+
+static const kam_char16 KAM_P_MGFW[] = {
+    '\\', 'E', 'F', 'I', '\\', 'M', 'i', 'c', 'r', 'o', 's', 'o', 'f', 't',
+    '\\', 'B', 'o', 'o', 't', '\\', 'b', 'o', 'o', 't', 'm', 'g', 'f', 'w',
+    '.', 'e', 'f', 'i', 0};
+static const kam_char16 KAM_P_BCD[] = {
+    '\\', 'E', 'F', 'I', '\\', 'M', 'i', 'c', 'r', 'o', 's', 'o', 'f', 't',
+    '\\', 'B', 'o', 'o', 't', '\\', 'B', 'C', 'D', 0};
+static const kam_char16 KAM_P_WIM[] = {
+    '\\', 's', 'o', 'u', 'r', 'c', 'e', 's', '\\', 'i', 'n', 's', 't', 'a',
+    'l', 'l', '.', 'w', 'i', 'm', 0};
+static const kam_char16 KAM_P_ESD[] = {
+    '\\', 's', 'o', 'u', 'r', 'c', 'e', 's', '\\', 'i', 'n', 's', 't', 'a',
+    'l', 'l', '.', 'e', 's', 'd', 0};
+
+static void kam_win_probe(kam_system_table_t *st, kam_file_proto_t *root) {
+    int mgfw, bcd, wim, esd;
+    mgfw = kam_try_open(root, KAM_P_MGFW);
+    bcd = kam_try_open(root, KAM_P_BCD);
+    wim = kam_try_open(root, KAM_P_WIM);
+    esd = kam_try_open(root, KAM_P_ESD);
+    if (!mgfw && !bcd && !wim && !esd)
+        return;
+    kam_puts(st, "WIN markers mgfw=");
+    kam_put_u64(st, (kam_u64)mgfw);
+    kam_puts(st, " bcd=");
+    kam_put_u64(st, (kam_u64)bcd);
+    kam_puts(st, " wim=");
+    kam_put_u64(st, (kam_u64)wim);
+    kam_puts(st, " esd=");
+    kam_put_u64(st, (kam_u64)esd);
+    kam_puts(st, "\n");
+}
+
 /* UEFI entry point: the linker script makes this symbol the entry. */
 kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
     kam_boot_services_t *bs;
@@ -442,6 +486,7 @@ kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
         kam_puts(st, "KAM: no volume\n");
         return KAM_EFI_NOT_FOUND;
     }
+    kam_win_probe(st, root);
 
     /* Static config first: KAM/KAM.INI. Missing file = dynamic only. */
     {
@@ -498,7 +543,7 @@ kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
     kam_puts(st, "KAM: chainloading ");
     kam_put_path(st, kam_entries[sel].path);
     kam_puts(st, "\n");
-    s = kam_chainload(st, bs, image, kam_entries[sel].path);
+    s = kam_chainload(bs, image, kam_entries[sel].path);
     kam_puts(st, "KAM: chainload returned\n");
     return s;
 }
