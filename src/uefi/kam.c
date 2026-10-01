@@ -1,15 +1,16 @@
 /* KAM UEFI application. x86_64 + AArch64 from a single source.
  * Freestanding C, no libc.
  *
- * Flow: banner -> GetMemoryMap (kam_memmap) -> load KAM/KERNEL.ELF from
- * the ESP -> AllocatePages for its segments -> ExitBootServices ->
- * jump to the kernel. After ExitBootServices only direct serial is used. */
+ * Flow: banner -> scan ESP (KERNEL.ELF first, then *.EFI) -> menu ->
+ * ELF direct-boot (map, alloc, ExitBootServices, jump) or EFI chainload
+ * (LoadImage/StartImage, stays in boot services). */
 
 #include "kam/efi.h"
 #include "kam/console.h"
 #include "kam/memmap.h"
 #include "kam/elf.h"
 #include "kam/raw_serial.h"
+#include "kam/scan.h"
 
 #if defined(__x86_64__)
 #define KAM_ARCH_NAME "x86_64 UEFI"
@@ -25,10 +26,23 @@
 static kam_u8 kam_map_buf[KAM_MAP_BUF_SIZE];
 static kam_memmap_t kam_map;
 static kam_u8 kam_info_buf[128];
+static kam_entry_t kam_entries[KAM_SCAN_MAX];
 
-static const kam_char16 KAM_KERNEL_PATH[] = {
-    '\\', 'K', 'A', 'M', '\\', 'K', 'E', 'R', 'N', 'E', 'L', '.', 'E', 'L',
-    'F', 0};
+static kam_usize kam_strlen16(const kam_char16 *s) {
+    kam_usize n = 0;
+    while (s[n])
+        n++;
+    return n;
+}
+
+static void kam_put_path(kam_system_table_t *st, const kam_char16 *p) {
+    char tmp[2] = {0, 0};
+    while (*p) {
+        tmp[0] = (char)(*p < 128 ? *p : '?');
+        kam_puts(st, tmp);
+        p++;
+    }
+}
 
 static void kam_put_hex(kam_system_table_t *st, kam_u64 v) {
     kam_usize i;
@@ -57,6 +71,39 @@ static void kam_put_u64(kam_system_table_t *st, kam_u64 v) {
         char tmp[2] = {buf[--i], 0};
         kam_puts(st, tmp);
     }
+}
+
+/* Menu over scanned entries. Returns the chosen index (timeout: 0). */
+static kam_usize kam_menu(kam_system_table_t *st, kam_usize count) {
+    kam_text_in_t *cin = st->con_in;
+    kam_key_t key;
+    kam_status_t s;
+    kam_usize i;
+    int t;
+
+    for (i = 0; i < count; i++) {
+        kam_put_u64(st, (kam_u64)(i + 1));
+        kam_puts(st, ") ");
+        kam_put_path(st, kam_entries[i].path);
+        kam_puts(st, kam_entries[i].kind == KAM_ENTRY_ELF ? " [elf]\n"
+                                                          : " [efi]\n");
+    }
+    if (!cin || !cin->read_key || !st->boot->stall) {
+        kam_puts(st, "No input services, booting default.\n");
+        return 0;
+    }
+    kam_puts(st, "Booting 1 in 5s, press 1-9.\n");
+    for (t = 0; t < 50; t++) {
+        s = cin->read_key(cin, &key);
+        if (s == KAM_EFI_SUCCESS && key.unicode >= (kam_char16)'1' &&
+            key.unicode <= (kam_char16)'9') {
+            kam_usize sel = (kam_usize)(key.unicode - (kam_char16)'1');
+            if (sel < count)
+                return sel;
+        }
+        st->boot->stall(100000);
+    }
+    return 0;
 }
 
 /* Fill kam_map from GetMemoryMap. Returns the map key for ExitBootServices. */
@@ -96,29 +143,19 @@ static kam_status_t kam_fill_map(kam_system_table_t *st, kam_usize *key_out) {
     return KAM_EFI_SUCCESS;
 }
 
-/* Read the whole kernel file into an AllocatePool buffer. */
-static kam_status_t kam_read_kernel(kam_handle_t image,
-                                    kam_boot_services_t *bs,
-                                    kam_u8 **img_out, kam_usize *size_out) {
-    kam_loaded_image_t *li = 0;
-    kam_fs_proto_t *fs = 0;
-    kam_file_proto_t *root = 0, *f = 0;
+/* Read a whole file (CHAR16 path) into an AllocatePool buffer. */
+static kam_status_t kam_read_file(kam_boot_services_t *bs,
+                                  kam_file_proto_t *root,
+                                  const kam_char16 *path, kam_u8 **img_out,
+                                  kam_usize *size_out) {
+    kam_file_proto_t *f = 0;
     kam_file_info_t *info = (kam_file_info_t *)kam_info_buf;
     kam_usize info_size = sizeof(kam_info_buf);
     kam_usize size;
     kam_u8 *buf = 0;
     kam_status_t s;
 
-    s = bs->handle_proto(image, &KAM_GUID_LOADED_IMAGE, (void **)&li);
-    if (KAM_EFI_ERROR(s) || !li)
-        return KAM_EFI_NOT_FOUND;
-    s = bs->handle_proto(li->dev_handle, &KAM_GUID_SIMPLE_FS, (void **)&fs);
-    if (KAM_EFI_ERROR(s) || !fs || !fs->open_volume)
-        return KAM_EFI_NOT_FOUND;
-    s = fs->open_volume(fs, &root);
-    if (KAM_EFI_ERROR(s) || !root)
-        return KAM_EFI_NOT_FOUND;
-    s = root->open(root, &f, KAM_KERNEL_PATH, KAM_EFI_FILE_MODE_READ, 0);
+    s = root->open(root, &f, path, KAM_EFI_FILE_MODE_READ, 0);
     if (KAM_EFI_ERROR(s) || !f)
         return KAM_EFI_NOT_FOUND;
     s = f->getinfo(f, &KAM_GUID_FILE_INFO, &info_size, info);
@@ -139,31 +176,11 @@ static kam_status_t kam_read_kernel(kam_handle_t image,
 
 typedef void (*kam_kernel_fn)(const kam_memmap_t *map);
 
-/* One-entry boot menu on ConIn. Timeout boots the default. */
-static int kam_menu(kam_system_table_t *st) {
-    kam_text_in_t *cin = st->con_in;
-    kam_key_t key;
-    kam_status_t s;
-    int t;
-
-    kam_puts(st, "1) KAM-KERNEL\n");
-    if (!cin || !cin->read_key || !st->boot->stall) {
-        kam_puts(st, "No input services, booting default.\n");
-        return 1;
-    }
-    kam_puts(st, "Booting 1 in 3s, press 1 for now.\n");
-    for (t = 0; t < 30; t++) {
-        s = cin->read_key(cin, &key);
-        if (s == KAM_EFI_SUCCESS && key.unicode == (kam_char16)'1')
-            return 1;
-        st->boot->stall(100000);
-    }
-    return 1;
-}
-
-/* UEFI entry point: the linker script makes this symbol the entry. */
-kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
-    kam_boot_services_t *bs;
+/* ELF direct-boot: map, load, ExitBootServices, jump. Never returns. */
+static kam_status_t kam_boot_elf(kam_handle_t image, kam_system_table_t *st,
+                                 kam_file_proto_t *root,
+                                 const kam_char16 *path) {
+    kam_boot_services_t *bs = st->boot;
     kam_usize key = 0;
     kam_status_t s;
     kam_u32 i;
@@ -174,14 +191,6 @@ kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
     kam_usize nseg = 0;
     kam_u64 entry;
     int tries;
-
-    if (!st || !st->con_out || !st->boot)
-        return KAM_EFI_UNSUPPORTED;
-    bs = st->boot;
-
-    /* No screen clear: ClearScreen is optional on some firmware. */
-    kam_puts(st, "KAM " KAM_ARCH_NAME "\n");
-    (void)kam_menu(st);
 
     s = kam_fill_map(st, &key);
     if (KAM_EFI_ERROR(s)) {
@@ -203,8 +212,7 @@ kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
     kam_put_u64(st, free_bytes);
     kam_puts(st, " bytes\n");
 
-    /* Load + validate the kernel before leaving boot services. */
-    s = kam_read_kernel(image, bs, &kimg, &ksize);
+    s = kam_read_file(bs, root, path, &kimg, &ksize);
     if (KAM_EFI_ERROR(s)) {
         kam_puts(st, "KAM: kernel file missing\n");
         return s;
@@ -217,16 +225,17 @@ kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
         kam_puts(st, "KAM: bad kernel ELF\n");
         return KAM_EFI_UNSUPPORTED;
     }
+
     /* Allocate the whole span once: segments may share pages. */
     {
         kam_u64 lo = ~(kam_u64)0, hi = 0;
         kam_u64 pages, addr;
         for (i = 0; i < nseg; i++) {
-            kam_u64 s = segs[i].paddr & ~(kam_u64)4095u;
+            kam_u64 b = segs[i].paddr & ~(kam_u64)4095u;
             kam_u64 e =
                 (segs[i].paddr + segs[i].memsz + 4095u) & ~(kam_u64)4095u;
-            if (s < lo)
-                lo = s;
+            if (b < lo)
+                lo = b;
             if (e > hi)
                 hi = e;
         }
@@ -262,4 +271,96 @@ kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
     kam_raw_puts("KAM: kernel returned, halting.\n");
     kam_raw_halt();
     return KAM_EFI_SUCCESS;
+}
+
+/* EFI chainload: our FilePath + FILEPATH node, LoadImage + StartImage. */
+static kam_status_t kam_chainload(kam_system_table_t *st,
+                                  kam_boot_services_t *bs,
+                                  kam_handle_t image,
+                                  const kam_char16 *path) {
+    kam_loaded_image_t *li = 0;
+    const kam_u8 *base;
+    const kam_u8 *p;
+    kam_usize prefix, n, node_len, total;
+    kam_u8 *buf = 0;
+    kam_handle_t child = 0;
+    kam_status_t s;
+    kam_usize i;
+
+    s = bs->handle_proto(image, &KAM_GUID_LOADED_IMAGE, (void **)&li);
+    if (KAM_EFI_ERROR(s) || !li)
+        return KAM_EFI_NOT_FOUND;
+    /* Our own FilePath is relative; resolve against the device path. */
+    s = bs->handle_proto(li->dev_handle, &KAM_GUID_DEVPATH, (void **)&base);
+    if (KAM_EFI_ERROR(s) || !base)
+        return KAM_EFI_NOT_FOUND;
+    p = base;
+    for (;;) {
+        kam_usize len = (kam_usize)p[2] | ((kam_usize)p[3] << 8);
+        if (p[0] == 0x7F && p[1] == 0xFF)
+            break;
+        if (len < 4)
+            return KAM_EFI_DEVICE_ERROR;
+        p += len;
+    }
+    prefix = (kam_usize)(p - base);
+    n = kam_strlen16(path);
+    node_len = 4 + (n + 1) * 2;
+    total = prefix + node_len + 4;
+    s = bs->alloc_pool(KAM_EFI_LOADER_DATA, total, (void **)&buf);
+    if (KAM_EFI_ERROR(s) || !buf)
+        return KAM_EFI_DEVICE_ERROR;
+    for (i = 0; i < prefix; i++)
+        buf[i] = base[i];
+    buf[prefix + 0] = 4;
+    buf[prefix + 1] = 4;
+    buf[prefix + 2] = (kam_u8)(node_len & 0xFF);
+    buf[prefix + 3] = (kam_u8)((node_len >> 8) & 0xFF);
+    for (i = 0; i <= n; i++) {
+        buf[prefix + 4 + i * 2] = (kam_u8)(path[i] & 0xFF);
+        buf[prefix + 4 + i * 2 + 1] = (kam_u8)((path[i] >> 8) & 0xFF);
+    }
+    buf[prefix + node_len + 0] = 0x7F;
+    buf[prefix + node_len + 1] = 0xFF;
+    buf[prefix + node_len + 2] = 4;
+    buf[prefix + node_len + 3] = 0;
+    s = bs->load_image(0, image, buf, 0, 0, &child);
+    if (KAM_EFI_ERROR(s) || !child)
+        return s;
+    return bs->start_image(child, 0, 0);
+}
+
+/* UEFI entry point: the linker script makes this symbol the entry. */
+kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
+    kam_boot_services_t *bs;
+    kam_file_proto_t *root = 0;
+    kam_usize count;
+    kam_usize sel;
+    kam_status_t s;
+
+    if (!st || !st->con_out || !st->boot)
+        return KAM_EFI_UNSUPPORTED;
+    bs = st->boot;
+
+    /* No screen clear: ClearScreen is optional on some firmware. */
+    kam_puts(st, "KAM " KAM_ARCH_NAME "\n");
+
+    count = kam_scan(bs, image, kam_entries, KAM_SCAN_MAX);
+    if (count == 0) {
+        kam_puts(st, "KAM: nothing bootable found\n");
+        return KAM_EFI_NOT_FOUND;
+    }
+    sel = kam_menu(st, count);
+    if (KAM_EFI_ERROR(kam_fs_open_root(bs, image, &root)) || !root) {
+        kam_puts(st, "KAM: no volume\n");
+        return KAM_EFI_NOT_FOUND;
+    }
+    if (kam_entries[sel].kind == KAM_ENTRY_ELF)
+        return kam_boot_elf(image, st, root, kam_entries[sel].path);
+    kam_puts(st, "KAM: chainloading ");
+    kam_put_path(st, kam_entries[sel].path);
+    kam_puts(st, "\n");
+    s = kam_chainload(st, bs, image, kam_entries[sel].path);
+    kam_puts(st, "KAM: chainload returned\n");
+    return s;
 }

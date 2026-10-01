@@ -17,7 +17,8 @@ BIOS_HEADERS := include/kam/types.h include/kam/memmap.h \
                 include/kam/bios_addrs.h include/kam/bios_console.h \
                 include/kam/elf.h
 KAM_HEADERS := include/kam/efi.h include/kam/types.h include/kam/console.h \
-               include/kam/memmap.h include/kam/elf.h include/kam/raw_serial.h
+               include/kam/memmap.h include/kam/elf.h include/kam/raw_serial.h \
+               include/kam/scan.h
 KERN_HEADERS := include/kam/types.h include/kam/memmap.h \
                 include/kam/elf.h include/kam/raw_serial.h
 
@@ -27,9 +28,9 @@ KCFLAGS  := -ffreestanding -nostdlib -fno-stack-protector \
             -fno-unwind-tables -fno-asynchronous-unwind-tables \
             -mno-red-zone -Wall -Wextra -O2 -Iinclude -c
 
-.PHONY: all bios bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64 esp run-x64 run-aa64 run-bios test-x64 test-aa64 test-bios clean
+.PHONY: all bios bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64 hello-x64 hello-aa64 esp run-x64 run-aa64 run-bios test-x64 test-aa64 test-chain-x64 test-chain-aa64 test-bios clean
 
-all: bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64
+all: bios-img check-uefi uefi-x64 uefi-aa64 kernel-x64 kernel-aa64 hello-x64 hello-aa64
 
 bios: $(BUILD)/mbr.bin
 	@echo "MBR: $< ($$(wc -c < $<) bytes)"
@@ -64,19 +65,50 @@ $(BUILD)/kam_aa64.o: src/uefi/kam.c $(KAM_HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC_AA64) $(CFLAGS) src/uefi/kam.c -o $@
 
-$(BUILD)/BOOTX64.EFI: $(BUILD)/kam_x64.o linker/uefi_x64.ld
+$(BUILD)/scan_x64.o: src/uefi/scan.c $(KAM_HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC_X64) $(CFLAGS) src/uefi/scan.c -o $@
+
+$(BUILD)/scan_aa64.o: src/uefi/scan.c $(KAM_HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC_AA64) $(CFLAGS) src/uefi/scan.c -o $@
+
+$(BUILD)/BOOTX64.EFI: $(BUILD)/kam_x64.o $(BUILD)/scan_x64.o linker/uefi_x64.ld
 	@test -x $(LD_LLD) || (echo "ld.lld missing: brew install lld"; exit 1)
 	$(LD_LLD) -flavor link -subsystem:efi_application -entry:efi_main \
-	  -out:$@ $(BUILD)/kam_x64.o
+	  -out:$@ $(BUILD)/kam_x64.o $(BUILD)/scan_x64.o
 
-$(BUILD)/BOOTAA64.EFI: $(BUILD)/kam_aa64.o linker/uefi_aa64.ld
+$(BUILD)/BOOTAA64.EFI: $(BUILD)/kam_aa64.o $(BUILD)/scan_aa64.o linker/uefi_aa64.ld
 	@test -x $(LD_LLD) || (echo "ld.lld missing: brew install lld"; exit 1)
 	$(LD_LLD) -flavor link -subsystem:efi_application -entry:efi_main \
-	  -out:$@ $(BUILD)/kam_aa64.o
+	  -out:$@ $(BUILD)/kam_aa64.o $(BUILD)/scan_aa64.o
 
-esp: uefi-x64 kernel-x64
+# --- HELLO.EFI chainload fixtures (entry: hello_main)
+$(BUILD)/hello_x64.o: src/uefi/hello.c $(KAM_HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC_X64) $(CFLAGS) src/uefi/hello.c -o $@
+
+$(BUILD)/hello_aa64.o: src/uefi/hello.c $(KAM_HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC_AA64) $(CFLAGS) src/uefi/hello.c -o $@
+
+hello-x64: $(BUILD)/HELLOX64.EFI
+hello-aa64: $(BUILD)/HELLOAA64.EFI
+
+$(BUILD)/HELLOX64.EFI: $(BUILD)/hello_x64.o
+	@test -x $(LD_LLD) || (echo "ld.lld missing: brew install lld"; exit 1)
+	$(LD_LLD) -flavor link -subsystem:efi_application -entry:hello_main \
+	  -out:$@ $(BUILD)/hello_x64.o
+
+$(BUILD)/HELLOAA64.EFI: $(BUILD)/hello_aa64.o
+	@test -x $(LD_LLD) || (echo "ld.lld missing: brew install lld"; exit 1)
+	$(LD_LLD) -flavor link -subsystem:efi_application -entry:hello_main \
+	  -out:$@ $(BUILD)/hello_aa64.o
+
+esp: uefi-x64 kernel-x64 hello-x64
 	python3 tools/mkesp.py --out $(BUILD)/esp.img --x64 $(BUILD)/BOOTX64.EFI --startup-nsh \
-	  --extra $(BUILD)/kernel-x64.elf:KAM/KERNEL.ELF
+	  --extra $(BUILD)/kernel-x64.elf:KAM/KERNEL.ELF \
+	  --extra $(BUILD)/HELLOX64.EFI:KAM/HELLO.EFI
 
 run-bios: bios-img
 	qemu-system-x86_64 -drive format=raw,file=$(BUILD)/bios.img -nographic -net none
@@ -91,14 +123,28 @@ run-aa64: uefi-aa64
 	  -drive format=raw,file=$(BUILD)/esp_aa64.img -nographic -net none -device ramfb
 
 test-x64: esp
-	sh tools/boot_test.sh $(BUILD)/test_x64.log '\EFI\BOOT\BOOTX64.EFI' 45 'KAM-KERNEL' -- \
+	python3 tools/drive_boot.py $(BUILD)/test_x64.log 40 'KAM-KERNEL' '' 20 -- \
 	  qemu-system-x86_64 -drive if=pflash,format=raw,readonly=on,file=$(QEMU_X64_FW) \
 	  -drive format=raw,file=$(BUILD)/esp.img -nographic -net none
 
-test-aa64: uefi-aa64 kernel-aa64
+test-chain-x64: esp
+	python3 tools/drive_boot.py $(BUILD)/test_chain_x64.log 40 'KAM-HELLO' '2' 20 -- \
+	  qemu-system-x86_64 -drive if=pflash,format=raw,readonly=on,file=$(QEMU_X64_FW) \
+	  -drive format=raw,file=$(BUILD)/esp.img -nographic -net none
+
+test-aa64: uefi-aa64 kernel-aa64 hello-aa64
 	python3 tools/mkesp.py --out $(BUILD)/esp_aa64.img --aa64 $(BUILD)/BOOTAA64.EFI --startup-nsh \
-	  --extra $(BUILD)/kernel-aa64.elf:KAM/KERNEL.ELF
-	sh tools/boot_test.sh $(BUILD)/test_aa64.log '\EFI\BOOT\BOOTAA64.EFI' 60 'KAM-KERNEL' -- \
+	  --extra $(BUILD)/kernel-aa64.elf:KAM/KERNEL.ELF \
+	  --extra $(BUILD)/HELLOAA64.EFI:KAM/HELLO.EFI
+	python3 tools/drive_boot.py $(BUILD)/test_aa64.log 90 'KAM-KERNEL' '' 55 -- \
+	  qemu-system-aarch64 -M virt -cpu cortex-a72 -bios $(QEMU_AA64_FW) \
+	  -drive format=raw,file=$(BUILD)/esp_aa64.img -nographic -net none -device ramfb
+
+test-chain-aa64: uefi-aa64 kernel-aa64 hello-aa64
+	python3 tools/mkesp.py --out $(BUILD)/esp_aa64.img --aa64 $(BUILD)/BOOTAA64.EFI --startup-nsh \
+	  --extra $(BUILD)/kernel-aa64.elf:KAM/KERNEL.ELF \
+	  --extra $(BUILD)/HELLOAA64.EFI:KAM/HELLO.EFI
+	python3 tools/drive_boot.py $(BUILD)/test_chain_aa64.log 90 'KAM-HELLO' '2' 55 -- \
 	  qemu-system-aarch64 -M virt -cpu cortex-a72 -bios $(QEMU_AA64_FW) \
 	  -drive format=raw,file=$(BUILD)/esp_aa64.img -nographic -net none -device ramfb
 
