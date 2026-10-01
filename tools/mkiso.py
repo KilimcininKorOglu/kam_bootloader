@@ -53,6 +53,19 @@ def dir_record(extent, size, flags, name):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
+    ap.add_argument("--bootable", action="store_true",
+                    help="El Torito bootable layout (BIOS + UEFI entries)")
+    ap.add_argument("--stage2", default=None,
+                    help="16-sector BIOS stage2 payload (goes to LBA 1)")
+    ap.add_argument("--kernel", default=None,
+                    help="kernel file staged at KERNEL_LBA")
+    ap.add_argument("--kernel-lba", type=int, default=145)
+    ap.add_argument("--mbr", default=None,
+                    help="512B BIOS boot image (El Torito target)")
+    ap.add_argument("--mbr-lba", type=int, default=273)
+    ap.add_argument("--efiimg", default=None,
+                    help="FAT image for the El Torito EFI section")
+    ap.add_argument("--efi-lba", type=int, default=274)
     a = ap.parse_args()
 
     nsec = 23
@@ -111,6 +124,59 @@ def main():
 
     # --- LBA 22: file data ---
     img[22 * SECTOR:22 * SECTOR + 14] = b"hello from iso"
+
+    if a.bootable:
+        for req in ("stage2", "kernel", "mbr", "efiimg"):
+            if getattr(a, req) is None:
+                print(f"mkiso: --bootable needs --{req}", file=sys.stderr)
+                return 1
+        with open(a.stage2, "rb") as f:
+            stage2 = f.read()
+        with open(a.kernel, "rb") as f:
+            kernel = f.read()
+        with open(a.mbr, "rb") as f:
+            mbr = f.read()
+        with open(a.efiimg, "rb") as f:
+            efiimg = f.read()
+        if len(stage2) > 4 * SECTOR:
+            print("mkiso: stage2 must fit 4 CD sectors (8KB, CD MBR "
+                  "loads 4x2048)", file=sys.stderr)
+            return 1
+        if len(kernel) > 128 * SECTOR:
+            print("mkiso: kernel must fit 128 sectors", file=sys.stderr)
+            return 1
+        if len(mbr) != 512 or len(efiimg) % SECTOR != 0:
+            print("mkiso: mbr must be 512 bytes (1 BIOS sector), "
+                  "efiimg CD-sector aligned", file=sys.stderr)
+            return 1
+        efi_sectors = len(efiimg) // SECTOR
+        if efi_sectors > 65535:
+            print("mkiso: efiimg must fit 65535 sectors", file=sys.stderr)
+            return 1
+        total = a.efi_lba + efi_sectors
+        grown = bytearray(total * SECTOR)
+        grown[0:len(img)] = img
+        img = grown
+        # Stage2 into the ISO system area (LBA 1-15, PVD stays at 16).
+        img[1 * SECTOR:1 * SECTOR + len(stage2)] = stage2
+        img[a.kernel_lba * SECTOR:a.kernel_lba * SECTOR + len(kernel)] = kernel
+        img[a.mbr_lba * SECTOR:(a.mbr_lba + 1) * SECTOR] = mbr
+        img[a.efi_lba * SECTOR:a.efi_lba * SECTOR + len(efiimg)] = efiimg
+        # Extend the catalog: x86 entry boots the MBR, EFI section boots FAT.
+        cat = bytearray(img[19 * SECTOR:20 * SECTOR])
+        cat[32] = 0x88        # x86 initial entry, bootable
+        cat[33] = 0           # no emulation
+        struct.pack_into("<H", cat, 32 + 6, 1)
+        struct.pack_into("<I", cat, 32 + 8, a.mbr_lba)
+        cat[64] = 0x91        # EFI section header, last
+        cat[65] = 0xEF        # EFI platform
+        struct.pack_into("<H", cat, 64 + 4, 1)
+        cat[96] = 0x88        # EFI section entry, bootable
+        cat[97] = 0           # no emulation
+        struct.pack_into("<H", cat, 96 + 6, efi_sectors)
+        struct.pack_into("<I", cat, 96 + 8, a.efi_lba)
+        img[19 * SECTOR:20 * SECTOR] = cat
+        nsec = total
 
     with open(a.out, "wb") as f:
         f.write(bytes(img))

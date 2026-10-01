@@ -8,12 +8,25 @@ BITS 16
 CPU 386
 ORG 0x7C00
 
+%ifdef CDROM
+; El Torito no-emulation: the drive speaks 2048-byte CD sectors, so all
+; counts/LBAs below are CD sectors. Must match tools/mkiso.py layout.
 %define STAGE2_LOAD  0x8000
-%define STAGE2_SECT  16
+%define S2_COUNT    4         ; 4x2048 = 8KB covers stage2
+%define KFILE_SEG   0x2000
+%define KFILE_LBA   145
+%define KF_TOTAL    32        ; 32x2048 = 64KB
+%define KF_CHUNK    32
+%define KF_SEGSTEP  4096      ; paragraphs per chunk (64KB = 0x1000)
+%else
+%define STAGE2_LOAD  0x8000
+%define S2_COUNT    16
 %define KFILE_SEG   0x2000
 %define KFILE_LBA   17
-%define KFILE_SECT  128
-%define KFILE_CHUNK 64
+%define KF_TOTAL    128
+%define KF_CHUNK    64
+%define KF_SEGSTEP  2048      ; paragraphs per chunk (32KB = 0x800)
+%endif
 %define DRIVE_BOX    0x0500
 %define DAP_ADDR     0x0600
 
@@ -35,7 +48,7 @@ start:
     mov si, DAP_ADDR
     mov byte [si + 0], 16    ; size
     mov byte [si + 1], 0     ; reserved
-    mov word [si + 2], STAGE2_SECT
+    mov word [si + 2], S2_COUNT
     mov word [si + 4], STAGE2_LOAD
     mov word [si + 6], 0
     mov dword [si + 8], 1    ; LBA 1
@@ -46,19 +59,23 @@ start:
     jnc .stage_ok
     mov si, msg_dap
     call puts
+    mov al, dl
+    call puthex
+    mov al, ah
+    call puthex
     jmp mbr_halt
 .stage_ok:
 
     ; Kernel file: 128 sectors from LBA 17 to 0x2000:0x0000, in 2x64.
     mov word [k_seg], KFILE_SEG
     mov dword [k_lba], KFILE_LBA
-    mov cx, KFILE_SECT / KFILE_CHUNK
+    mov cx, KF_TOTAL / KF_CHUNK
 .kloop:
     push cx
     mov si, DAP_ADDR
     mov byte [si + 0], 16
     mov byte [si + 1], 0
-    mov word [si + 2], KFILE_CHUNK
+    mov word [si + 2], KF_CHUNK
     mov word [si + 4], 0
     mov ax, [k_seg]
     mov [si + 6], ax
@@ -71,10 +88,14 @@ start:
     jnc .kok
     mov si, msg_dap
     call puts
+    mov al, dl
+    call puthex
+    mov al, ah
+    call puthex
     jmp mbr_halt
 .kok:
-    add word [k_seg], KFILE_CHUNK * 32  ; 512/16 paragraphs per sector
-    add dword [k_lba], KFILE_CHUNK
+    add word [k_seg], KF_SEGSTEP
+    add dword [k_lba], KF_CHUNK
     pop cx
     loop .kloop
 
@@ -102,6 +123,38 @@ puts:
     pop si
     pop bx
     pop ax
+    ret
+
+; AL = byte, prints 2 hex digits + space via teletype.
+puthex:
+    push ax
+    push bx
+    push cx
+    mov cl, al
+    shr al, 4
+    call .nib
+    mov al, cl
+    and al, 0x0F
+    call .nib
+    mov al, ' '
+    mov ah, 0x0E
+    mov bx, 0x0007
+    int 0x10
+    pop cx
+    pop bx
+    pop ax
+    ret
+.nib:
+    cmp al, 10
+    jb .dig
+    add al, 'A' - 10
+    jmp .out
+.dig:
+    add al, '0'
+.out:
+    mov ah, 0x0E
+    mov bx, 0x0007
+    int 0x10
     ret
 
 msg:     db 'KAM BIOS MBR', 13, 10, 0

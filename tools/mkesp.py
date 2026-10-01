@@ -14,14 +14,28 @@ import sys
 SECTOR = 512
 PART_START = 2048  # 1MiB alignment, standard for ESPs
 
-def build_fat16(files, total_sectors=131072, startup_nsh=None, extras=None):  # 64MiB volume
+def build_fat16(files, total_sectors=131072, startup_nsh=None, extras=None,
+                superfloppy=False):  # 64MiB volume
     reserved = 4
     fats = 2
-    sectors_per_fat = 256
     root_entries = 512
-    sectors_per_cluster = 4  # 2KB clusters
     root_sectors = root_entries * 32 // SECTOR
-    first_data = reserved + fats * sectors_per_fat + root_sectors
+    # Cluster size + FAT size: stay FAT16 (4085..65525 clusters).
+    sectors_per_cluster, sectors_per_fat = 4, 256
+    clusters = (total_sectors - reserved - fats * sectors_per_fat -
+                root_sectors) // sectors_per_cluster
+    if not 4085 <= clusters <= 65525:
+        for sectors_per_cluster in (2, 1):
+            sectors_per_fat = max(
+                1, -(-((total_sectors // sectors_per_cluster + 2) * 2)
+                     // SECTOR))
+            clusters = (total_sectors - reserved - fats * sectors_per_fat -
+                        root_sectors) // sectors_per_cluster
+            if 4085 <= clusters <= 65525:
+                break
+        else:
+            raise RuntimeError('volume too small for FAT16')
+    first_data = (reserved + fats * sectors_per_fat + root_sectors)
 
     vol = bytearray(total_sectors * SECTOR)
 
@@ -265,7 +279,10 @@ def build_fat16(files, total_sectors=131072, startup_nsh=None, extras=None):  # 
     root_off = (first_data - root_sectors) * SECTOR
     vol[root_off:root_off + root_sectors * SECTOR] = root
 
-    # --- MBR with one bootable FAT16-LBA partition ---
+    # --- MBR with one bootable FAT16-LBA partition (skipped for
+    # El Torito EFI images: those must be plain FAT volumes) ---
+    if superfloppy:
+        return bytes(vol)
     disk_sectors = PART_START + total_sectors
     img = bytearray(disk_sectors * SECTOR)
     mbr = bytearray(SECTOR)
@@ -293,6 +310,11 @@ def main():
                     help='add STARTUP.NSH fallback launching the default loader')
     ap.add_argument('--extra', action='append', default=[],
                     help='extra file as SRC:FATPATH (e.g. k.elf:KAM/KERNEL.ELF)')
+    ap.add_argument('--sectors', type=int, default=131072,
+                    help='volume size in sectors (default 131072 = 64MB)')
+    ap.add_argument('--superfloppy', action='store_true',
+                    help='omit the MBR, volume starts at offset 0 '
+                         '(El Torito EFI boot images)')
     a = ap.parse_args()
     files = []
     if a.x64:
@@ -311,8 +333,10 @@ def main():
         src, _, dst = item.partition(':')
         with open(src, 'rb') as f:
             extras.append((dst, f.read()))
-    img = build_fat16(files, startup_nsh=nsh, extras=extras)
-    assert len(img) == (PART_START + 131072) * SECTOR, len(img)
+    img = build_fat16(files, total_sectors=a.sectors, startup_nsh=nsh,
+                      extras=extras, superfloppy=a.superfloppy)
+    expect = a.sectors if a.superfloppy else (PART_START + a.sectors)
+    assert len(img) == expect * SECTOR, len(img)
     os.makedirs(os.path.dirname(a.out) or '.', exist_ok=True)
     with open(a.out, 'wb') as f:
         f.write(img)
