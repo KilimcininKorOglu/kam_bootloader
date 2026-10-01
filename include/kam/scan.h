@@ -15,13 +15,16 @@
 typedef enum kam_entry_kind {
     KAM_ENTRY_ELF,
     KAM_ENTRY_EFI,
-    KAM_ENTRY_ISO
+    KAM_ENTRY_ISO,
+    KAM_ENTRY_LINUX
 } kam_entry_kind_t;
 
 typedef struct kam_entry {
     kam_entry_kind_t kind;
     kam_char16 path[KAM_PATH_CHARS];
     char label[KAM_LABEL_CHARS];
+    kam_char16 initrd[KAM_PATH_CHARS];
+    char cmdline[128];
 } kam_entry_t;
 
 /* Open the volume our image was loaded from. */

@@ -51,10 +51,14 @@ static void kam_drop_entry(kam_entry_t *out, kam_usize *count) {
     if (out[*count - 1].path[0] != 0)
         return;
     (*count)--;
-    for (i = 0; i < KAM_PATH_CHARS; i++)
+    for (i = 0; i < KAM_PATH_CHARS; i++) {
         out[*count].path[i] = 0;
+        out[*count].initrd[i] = 0;
+    }
     for (i = 0; i < KAM_LABEL_CHARS; i++)
         out[*count].label[i] = 0;
+    for (i = 0; i < 128; i++)
+        out[*count].cmdline[i] = 0;
 }
 
 kam_usize kam_config_parse(const kam_u8 *buf, kam_usize size,
@@ -63,17 +67,21 @@ kam_usize kam_config_parse(const kam_u8 *buf, kam_usize size,
     kam_usize count = 0;
     kam_usize timeout = 5;
     kam_usize def = 0;
-    int section = -1; /* -1 none, 0 kernel, 1 chain, 2 iso */
+    int section = -1; /* -1 none, 0 kernel, 1 chain, 2 iso, 3 linux */
     kam_usize off = 0;
     kam_usize i;
 
     for (i = 0; i < max; i++) {
         kam_usize j;
         out[i].kind = KAM_ENTRY_ELF;
-        for (j = 0; j < KAM_PATH_CHARS; j++)
+        for (j = 0; j < KAM_PATH_CHARS; j++) {
             out[i].path[j] = 0;
+            out[i].initrd[j] = 0;
+        }
         for (j = 0; j < KAM_LABEL_CHARS; j++)
             out[i].label[j] = 0;
+        for (j = 0; j < 128; j++)
+            out[i].cmdline[j] = 0;
     }
 
     while (off < size) {
@@ -108,6 +116,10 @@ kam_usize kam_config_parse(const kam_u8 *buf, kam_usize size,
                             out[count].kind = KAM_ENTRY_ISO;
                             section = 2;
                             count++;
+                        } else if (kam_word_eq(nm, nl, "linux")) {
+                            out[count].kind = KAM_ENTRY_LINUX;
+                            section = 3;
+                            count++;
                         }
                     }
                 }
@@ -141,6 +153,17 @@ kam_usize kam_config_parse(const kam_u8 *buf, kam_usize size,
                         } else if (kam_word_eq(buf + a, kl, "path") &&
                                    vn > 0) {
                             kam_copy_path(e->path, buf + va, vn);
+                        } else if (kam_word_eq(buf + a, kl, "initrd") &&
+                                   vn > 0) {
+                            kam_copy_path(e->initrd, buf + va, vn);
+                        } else if (kam_word_eq(buf + a, kl, "cmdline") &&
+                                   vn > 0) {
+                            kam_usize n = vn;
+                            if (n >= 128)
+                                n = 128 - 1;
+                            for (k = 0; k < n; k++)
+                                e->cmdline[k] = (char)buf[va + k];
+                            e->cmdline[n] = 0;
                         }
                     }
                 }

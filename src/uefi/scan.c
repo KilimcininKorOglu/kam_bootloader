@@ -130,6 +130,13 @@ static kam_status_t kam_walk(kam_file_proto_t *dir, const kam_char16 *prefix,
                             out[*count].kind = is_kernel ? KAM_ENTRY_ELF
                                              : is_efi   ? KAM_ENTRY_EFI
                                                         : KAM_ENTRY_ISO;
+                            {
+                                kam_usize z;
+                                for (z = 0; z < KAM_PATH_CHARS; z++)
+                                    out[*count].initrd[z] = 0;
+                                for (z = 0; z < 128; z++)
+                                    out[*count].cmdline[z] = 0;
+                            }
                             /* Label = basename, ASCII. */
                             s = 0;
                             e = 0;

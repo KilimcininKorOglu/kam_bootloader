@@ -14,6 +14,7 @@
 #include "kam/iso.h"
 #include "kam/config.h"
 #include "kam/gop.h"
+#include "kam/linux.h"
 
 #if defined(__x86_64__)
 #define KAM_ARCH_NAME "x86_64 UEFI"
@@ -112,7 +113,8 @@ static kam_usize kam_menu(kam_system_table_t *st, kam_usize count,
         kam_puts(st, kam_entries[i].label);
         kam_puts(st, kam_entries[i].kind == KAM_ENTRY_ELF ? " [elf]\n"
                  : kam_entries[i].kind == KAM_ENTRY_EFI  ? " [efi]\n"
-                                                        : " [iso]\n");
+                 : kam_entries[i].kind == KAM_ENTRY_ISO  ? " [iso]\n"
+                                                        : " [linux]\n");
     }
     if (def >= count)
         def = 0;
@@ -532,6 +534,54 @@ kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
     sel = kam_menu(st, count, timeout, def);
     if (kam_entries[sel].kind == KAM_ENTRY_ELF)
         return kam_boot_elf(image, st, root, kam_entries[sel].path);
+    if (kam_entries[sel].kind == KAM_ENTRY_LINUX) {
+        kam_u8 *img = 0, *ird = 0;
+        kam_usize isize = 0, rsize = 0;
+        kam_usize key = 0;
+        kam_u64 img_addr = 0, ird_addr = 0, params_addr = 0;
+        const char *cmd;
+        int bz;
+        kam_puts(st, "KAM: direct linux boot\n");
+        bz = kam_bz_claim(bs, &img_addr, &ird_addr, &params_addr);
+        if (bz <= 0) {
+            kam_puts(st, "KAM: bzImage claim failed stage ");
+            kam_put_u64(st, (kam_u64)(kam_u32)(-bz));
+            kam_puts(st, " status ");
+            kam_put_hex(st, (kam_u64)kam_bz_last_status);
+            kam_puts(st, " want ");
+            kam_put_hex(st, kam_bz_last_want);
+            kam_puts(st, "\n");
+            return KAM_EFI_DEVICE_ERROR;
+        }
+        if (KAM_EFI_ERROR(kam_fill_map(st, &key))) {
+            kam_puts(st, "KAM: GetMemoryMap failed\n");
+            return KAM_EFI_DEVICE_ERROR;
+        }
+        if (KAM_EFI_ERROR(
+                kam_read_file(bs, root, kam_entries[sel].path, &img,
+                              &isize))) {
+            kam_puts(st, "KAM: kernel file missing\n");
+            return KAM_EFI_NOT_FOUND;
+        }
+        if (kam_entries[sel].initrd[0] &&
+            KAM_EFI_ERROR(kam_read_file(bs, root, kam_entries[sel].initrd,
+                                         &ird, &rsize))) {
+            kam_puts(st, "KAM: initrd file missing\n");
+            return KAM_EFI_NOT_FOUND;
+        }
+        cmd = kam_entries[sel].cmdline[0] ? kam_entries[sel].cmdline
+                                          : "kam-test";
+        kam_puts(st, "KAM: jumping to bzImage.\n");
+        bz = kam_bz_boot(bs, img, isize, ird, rsize, cmd, &kam_map,
+                         img_addr, ird_addr, params_addr);
+        if (bz <= 0) {
+            kam_puts(st, "KAM: bzImage refused stage ");
+            kam_put_u64(st, (kam_u64)(kam_u32)(-bz));
+            kam_puts(st, "\n");
+            return KAM_EFI_UNSUPPORTED;
+        }
+        return KAM_EFI_SUCCESS;
+    }
     if (kam_entries[sel].kind == KAM_ENTRY_ISO) {
         kam_puts(st, "KAM: probing ");
         kam_put_path(st, kam_entries[sel].path);

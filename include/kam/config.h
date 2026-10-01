@@ -18,6 +18,12 @@
  *   label Test ISO
  *   path \KAM\TEST.ISO
  *
+ *   [linux]        # direct bzImage boot
+ *   label Test Linux
+ *   path \KAM\VMLINUZ
+ *   initrd \KAM\INITRD.IMG
+ *   cmdline kam-test console=ttyS0
+ *
  * Unknown sections/keys are ignored. Entries without a path are dropped.
  * Callers merge config entries first, then append scan results
  * (dedupe by path). */
