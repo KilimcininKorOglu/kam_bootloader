@@ -625,13 +625,18 @@ kam_status_t efi_main(kam_handle_t image, kam_system_table_t *st) {
     timeout = kam_cfg.timeout;
     def = kam_cfg.def;
 
-    /* Append scanned files not already listed (same volume + path). */
+    /* Append scanned files not already listed. Volumes compare by device
+     * handle (config entries with dev 0 mean our own volume); the numeric
+     * vol tag is scan-order-dependent and only for display. */
     nscan = kam_scan_all(bs, image, kam_scanout, KAM_SCAN_MAX);
     for (i = 0; i < nscan && count < KAM_SCAN_MAX; i++) {
         kam_usize j;
         int dup = 0;
         for (j = 0; j < count; j++) {
-            if (kam_scanout[i].vol == kam_cfg.entries[j].vol &&
+            kam_handle_t cfg_dev = kam_cfg.entries[j].dev
+                                       ? kam_cfg.entries[j].dev
+                                       : our_dev;
+            if (kam_scanout[i].dev == cfg_dev &&
                 kam_path_eq(kam_scanout[i].path, kam_cfg.entries[j].path)) {
                 dup = 1;
                 break;
